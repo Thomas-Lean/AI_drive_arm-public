@@ -1,0 +1,101 @@
+TC-004 总线侦察与 0x16 只读摸底 —— V330 重测轮（固件 F35；上轮 V311 0x16 零响应原因见 F34；板载时钟 20231122_065509，仅参考）
+!! 本脚本只发只读指令（0x01/0x0A/0x16），不发任何运动指令
+!! 前置检查：4 服务 inactive + /dev/ttyS4 无占用（复审 H1）
+   preflight: 服务 4×inactive
+   preflight: /dev/ttyS4 无占用
+日志: /home/ubuntu/p04_probes/tc004_log_20231122_065509.jsonl
+===== 阶段1：ping 扫描（0x01，3 轮 × ID 0–6，轮内间隔 60ms、轮间 ≥150ms）=====
+round1 ping J0: OK   rtt=9.3ms
+round1 ping J1: OK   rtt=9.2ms
+round1 ping J2: OK   rtt=14.0ms
+round1 ping J3: OK   rtt=10.5ms
+round1 ping J4: OK   rtt=7.1ms
+round1 ping J5: OK   rtt=2.9ms
+round1 ping J6: OK   rtt=2.9ms
+round2 ping J0: OK   rtt=6.6ms
+round2 ping J1: OK   rtt=11.6ms
+round2 ping J2: OK   rtt=6.5ms
+round2 ping J3: OK   rtt=11.6ms
+round2 ping J4: OK   rtt=11.6ms
+round2 ping J5: OK   rtt=7.2ms
+round2 ping J6: OK   rtt=11.7ms
+round3 ping J0: OK   rtt=7.0ms
+round3 ping J1: OK   rtt=12.2ms
+round3 ping J2: OK   rtt=12.2ms
+round3 ping J3: OK   rtt=12.1ms
+round3 ping J4: OK   rtt=12.0ms
+round3 ping J5: OK   rtt=6.5ms
+round3 ping J6: OK   rtt=12.0ms
+-- ping 小结：3/3 轮全过：[0, 1, 2, 3, 4, 5, 6]
+   J0: 3/3 OK, rtt 中位 7.0ms 最大 9.3ms
+   J1: 3/3 OK, rtt 中位 11.6ms 最大 12.2ms
+   J2: 3/3 OK, rtt 中位 12.2ms 最大 14.0ms
+   J3: 3/3 OK, rtt 中位 11.6ms 最大 12.1ms
+   J4: 3/3 OK, rtt 中位 11.6ms 最大 12.0ms
+   J5: 3/3 OK, rtt 中位 6.5ms 最大 7.2ms
+   J6: 3/3 OK, rtt 中位 11.7ms 最大 12.0ms
+===== 阶段2：0x16 数据监控（间隔 150ms）=====
+   J5 0x16: 12099mV 14mA 169mW T=32.7C st=0x00 ang=-0.4° turn=-1 rtt=11.3ms
+   J5 0x16: 12094mV 14mA 169mW T=32.7C st=0x00 ang=-0.4° turn=-1 rtt=8.2ms
+   J5 0x16: 12099mV 14mA 169mW T=32.7C st=0x00 ang=-0.4° turn=-1 rtt=8.0ms
+   J5 0x16: 12099mV 14mA 169mW T=32.7C st=0x00 ang=-0.4° turn=-1 rtt=8.1ms
+   J5 0x16: 12099mV 14mA 169mW T=32.7C st=0x00 ang=-0.4° turn=-1 rtt=7.4ms
+   J5 0x16: 12099mV 14mA 169mW T=32.7C st=0x00 ang=-0.4° turn=-1 rtt=14.4ms
+   J5 0x16: 12099mV 14mA 169mW T=32.7C st=0x00 ang=-0.4° turn=-1 rtt=9.1ms
+   J5 0x16: 12099mV 14mA 169mW T=32.7C st=0x00 ang=-0.4° turn=-1 rtt=12.4ms
+   J5 0x16: 12099mV 14mA 169mW T=32.7C st=0x00 ang=-0.4° turn=-1 rtt=14.2ms
+   J5 0x16: 12099mV 14mA 169mW T=32.7C st=0x00 ang=-0.4° turn=-1 rtt=5.9ms
+   -- J5: 10/10 有效（无响应/坏帧 0），电压 12094–12099mV, 电流峰值 14mA 中位 14mA, 功率中位 169mW, 温度峰值 32.7C, 状态非零 0 次, 无效哨兵 0 次
+   J6 0x16: 12375mV 14mA 173mW T=34.3C st=0x00 ang=+63.6° turn=0 rtt=6.5ms
+   J6 0x16: 12375mV 14mA 173mW T=34.3C st=0x00 ang=+63.6° turn=0 rtt=5.9ms
+   J6 0x16: 12375mV 14mA 173mW T=34.3C st=0x00 ang=+63.6° turn=0 rtt=6.2ms
+   J6 0x16: 12375mV 14mA 173mW T=34.3C st=0x00 ang=+63.6° turn=0 rtt=5.9ms
+   J6 0x16: 12375mV 14mA 173mW T=34.3C st=0x00 ang=+63.6° turn=0 rtt=6.4ms
+   J6 0x16: 12375mV 14mA 173mW T=34.3C st=0x00 ang=+63.6° turn=0 rtt=5.9ms
+   J6 0x16: 12375mV 14mA 173mW T=34.3C st=0x00 ang=+63.6° turn=0 rtt=6.3ms
+   J6 0x16: 12375mV 14mA 173mW T=34.3C st=0x00 ang=+63.6° turn=0 rtt=5.7ms
+   J6 0x16: 12375mV 14mA 173mW T=34.3C st=0x00 ang=+63.6° turn=0 rtt=5.7ms
+   J6 0x16: 12375mV 14mA 173mW T=34.3C st=0x00 ang=+63.6° turn=0 rtt=6.0ms
+   -- J6: 10/10 有效（无响应/坏帧 0），电压 12375–12375mV, 电流峰值 14mA 中位 14mA, 功率中位 173mW, 温度峰值 34.3C, 状态非零 0 次, 无效哨兵 0 次
+   J0 0x16: 12375mV 14mA 173mW T=34.9C st=0x00 ang=+0.1° turn=0 rtt=6.0ms
+   J0 0x16: 12375mV 14mA 173mW T=34.9C st=0x00 ang=+0.1° turn=0 rtt=5.8ms
+   -- J0: 2/2 有效（无响应/坏帧 0），电压 12375–12375mV, 电流峰值 14mA 中位 14mA, 功率中位 173mW, 温度峰值 34.9C, 状态非零 0 次, 无效哨兵 0 次
+   J1 0x16: 12234mV 14mA 171mW T=32.5C st=0x00 ang=-90.4° turn=-1 rtt=6.4ms
+   J1 0x16: 12234mV 14mA 171mW T=32.5C st=0x00 ang=-90.3° turn=-1 rtt=5.7ms
+   -- J1: 2/2 有效（无响应/坏帧 0），电压 12234–12234mV, 电流峰值 14mA 中位 14mA, 功率中位 171mW, 温度峰值 32.5C, 状态非零 0 次, 无效哨兵 0 次
+   J2 0x16: 12302mV 14mA 172mW T=30.6C st=0x00 ang=+88.9° turn=0 rtt=6.4ms
+   J2 0x16: 12302mV 14mA 172mW T=30.6C st=0x00 ang=+88.9° turn=0 rtt=5.7ms
+   -- J2: 2/2 有效（无响应/坏帧 0），电压 12302–12302mV, 电流峰值 14mA 中位 14mA, 功率中位 172mW, 温度峰值 30.6C, 状态非零 0 次, 无效哨兵 0 次
+   J3 0x16: 12316mV 14mA 172mW T=31.5C st=0x00 ang=-0.4° turn=-1 rtt=6.4ms
+   J3 0x16: 12316mV 14mA 172mW T=31.5C st=0x00 ang=-0.3° turn=-1 rtt=5.8ms
+   -- J3: 2/2 有效（无响应/坏帧 0），电压 12316–12316mV, 电流峰值 14mA 中位 14mA, 功率中位 172mW, 温度峰值 31.5C, 状态非零 0 次, 无效哨兵 0 次
+   J4 0x16: 12292mV 14mA 172mW T=31.4C st=0x00 ang=+12.2° turn=0 rtt=6.3ms
+   J4 0x16: 12292mV 14mA 172mW T=31.4C st=0x00 ang=+12.2° turn=0 rtt=5.8ms
+   -- J4: 2/2 有效（无响应/坏帧 0），电压 12292–12292mV, 电流峰值 14mA 中位 14mA, 功率中位 172mW, 温度峰值 31.4C, 状态非零 0 次, 无效哨兵 0 次
+===== 阶段3：0x0A 读角度交叉核对（0x0A 与 0x16 之间由 10ms 帧间隔隔开）=====
+J5 #1: 0x0A=-0.4°  0x16=-0.4°(归一) Δ=0.00°
+J5 #2: 0x0A=-0.4°  0x16=-0.4°(归一) Δ=0.00°
+J5 #3: 0x0A=-0.4°  0x16=-0.4°(归一) Δ=0.00°
+J5 #4: 0x0A=-0.4°  0x16=-0.4°(归一) Δ=0.00°
+J5 #5: 0x0A=-0.4°  0x16=-0.4°(归一) Δ=0.00°
+   -- J5: 0x0A 5/5 OK; 归一化后 |Δ| 均值 0.00°（有效对 5）
+J6 #1: 0x0A=+63.6°  0x16=+63.6°(归一) Δ=0.00°
+J6 #2: 0x0A=+63.6°  0x16=+63.6°(归一) Δ=0.00°
+J6 #3: 0x0A=+63.6°  0x16=+63.6°(归一) Δ=0.00°
+J6 #4: 0x0A=+63.6°  0x16=+63.6°(归一) Δ=0.00°
+J6 #5: 0x0A=+63.6°  0x16=+63.6°(归一) Δ=0.00°
+   -- J6: 0x0A 5/5 OK; 归一化后 |Δ| 均值 0.00°（有效对 5）
+===== SUMMARY =====
+SUMMARY ping_online_ids = [0, 1, 2, 3, 4, 5, 6] (全部轮次全过者)
+SUMMARY ping_ok_counts  = {0: '3/3', 1: '3/3', 2: '3/3', 3: '3/3', 4: '3/3', 5: '3/3', 6: '3/3'}
+SUMMARY J0 0x16 2/2 有效（无响应/坏帧 0），电压 12375–12375mV, 电流中位 14mA 功率中位 173mW, 状态非零 0 次(bit0/1 含义未知), 无效哨兵 0 次
+SUMMARY J1 0x16 2/2 有效（无响应/坏帧 0），电压 12234–12234mV, 电流中位 14mA 功率中位 171mW, 状态非零 0 次(bit0/1 含义未知), 无效哨兵 0 次
+SUMMARY J2 0x16 2/2 有效（无响应/坏帧 0），电压 12302–12302mV, 电流中位 14mA 功率中位 172mW, 状态非零 0 次(bit0/1 含义未知), 无效哨兵 0 次
+SUMMARY J3 0x16 2/2 有效（无响应/坏帧 0），电压 12316–12316mV, 电流中位 14mA 功率中位 172mW, 状态非零 0 次(bit0/1 含义未知), 无效哨兵 0 次
+SUMMARY J4 0x16 2/2 有效（无响应/坏帧 0），电压 12292–12292mV, 电流中位 14mA 功率中位 172mW, 状态非零 0 次(bit0/1 含义未知), 无效哨兵 0 次
+SUMMARY J5 0x16 10/10 有效（无响应/坏帧 0），电压 12094–12099mV, 电流中位 14mA 功率中位 169mW, 状态非零 0 次(bit0/1 含义未知), 无效哨兵 0 次
+SUMMARY J6 0x16 10/10 有效（无响应/坏帧 0），电压 12375–12375mV, 电流中位 14mA 功率中位 173mW, 状态非零 0 次(bit0/1 含义未知), 无效哨兵 0 次
+SUMMARY F40 对照（只记录不判定）：上位机在 V330 升级后读 J6/J2 静止约 14mA / 172mW（F40，原因【未验证】）；上表 0x16 电流/功率中位为本脚本读数——两口径是否一致交离线分析记录，不设阈值不判定
+SUMMARY J5 0x0A 5/5 OK, 归一化 |Δ0x0A−0x16| 均值 0.00°（有效对 5）
+SUMMARY J6 0x0A 5/5 OK, 归一化 |Δ0x0A−0x16| 均值 0.00°（有效对 5）
+TC-004 脚本执行完毕；判定由 执行方 对照用例给出

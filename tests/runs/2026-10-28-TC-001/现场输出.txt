@@ -1,0 +1,290 @@
+日期：2026-10-28；执行人：Thomas。
+来源：会话粘贴与口述，终端富文本换行已整理；不等同于一键采集块落盘原文件。
+命令依据向导提供内容列出；缺少输出的地方明确标注。步骤实际时分未采集。
+
+[路由：上位机]
+ip route get <ARM_IP>
+<ARM_IP> dev <USB_NIC> src <HOST_IP> uid 1000
+    cache
+Thomas 对直接 SSH 的结果：进去了啊 没问题
+
+[服务基线：臂载计算机]
+systemctl is-active marm_controller marm_communication marm_control marm_subscripber
+active
+active
+active
+active
+
+[model]
+cat /proc/device-tree/model 2>/dev/null; echo
+Amlogic
+
+[CPU]
+head -25 /proc/cpuinfo
+processor       : 0
+BogoMIPS        : 48.00
+Features        : fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp
+CPU implementer : 0x41
+CPU architecture: 8
+CPU variant     : 0x1
+CPU part        : 0xd05
+CPU revision    : 0
+
+processor       : 1
+BogoMIPS        : 48.00
+Features        : fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp
+CPU implementer : 0x41
+CPU architecture: 8
+CPU variant     : 0x1
+CPU part        : 0xd05
+CPU revision    : 0
+
+processor       : 2
+BogoMIPS        : 48.00
+Features        : fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp
+CPU implementer : 0x41
+CPU architecture: 8
+CPU variant     : 0x1
+CPU part        : 0xd05
+
+[资源]
+nproc; free -h; df -h /
+4
+              total        used        free      shared  buff/cache   available
+Mem:          1.9Gi        87Mi       823Mi       1.0Mi       1.1Gi       1.8Gi
+Swap:            0B          0B          0B
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/system     7.8G  2.5G  5.4G  32% /
+
+[串口设备]
+ls -l /dev/ttyS* 2>/dev/null
+crw--w---- 1 root tty     242, 0 Nov 22 05:10 /dev/ttyS0
+crw-rw-rw- 1 root dialout 242, 1 Nov 22 05:10 /dev/ttyS1
+crw-rw-rw- 1 root dialout 242, 4 Nov 29 11:05 /dev/ttyS4
+
+[厂商目录]
+ls -la /home/ubuntu/.extracted /home/ubuntu/.ota_system /home/ubuntu/.historical_data 2>/dev/null | head -30
+/home/ubuntu/.extracted:
+total 7300
+drwxr-xr-x  3 root   root    4096 Nov 28  2024 .
+drwxr-xr-x 17 ubuntu root    4096 Nov 22 06:37 ..
+drwxr-xr-x  4 root   root    4096 Nov 28  2024 marm_code
+-rw-r--r--  1 root   root 7458932 Nov 28  2024 marm_code.zip
+
+/home/ubuntu/.historical_data:
+total 8
+drwxr-xr-x  2 root   root 4096 Nov 28  2024 .
+drwxr-xr-x 17 ubuntu root 4096 Nov 22 06:37 ..
+
+/home/ubuntu/.ota_system:
+total 16
+drwxr-xr-x  2 root   root 4096 Nov 28  2024 .
+drwxr-xr-x 17 ubuntu root 4096 Nov 22 06:37 ..
+-rwxr-xr-x  1 root   root 1467 Nov 28  2024 ota_system.py
+-rwxr-xr-x  1 root   root   96 Nov 28  2024 ota_system.sh
+
+[首次占用查询]
+sudo fuser -v /dev/ttyS4 2>&1
+sudo: fuser: command not found
+
+sudo lsof /dev/ttyS4 2>/dev/null || echo lsof未安装
+lsof未安装
+说明：该备用命令输出不能独立证明 lsof 未安装，也可能是其返回非零。
+
+[C 段命令]
+for u in marm_controller marm_communication marm_control marm_subscripber; do
+  p=$(systemctl show -p MainPID --value $u)
+  echo "== $u MainPID=$p"
+  ps -p $p -o pid,lstart,cmd --no-headers 2>/dev/null
+  echo "   exe=$(readlink /proc/$p/exe 2>/dev/null)"
+  ls -l /proc/$p/fd 2>/dev/null | grep -i "ttyS" || echo "   (bash自身未打开ttyS*)"
+  for c in $(pgrep -P $p); do
+    echo "   -- 子进程 $c: $(readlink /proc/$c/exe 2>/dev/null)"
+    ps -p $c -o pid,lstart,cmd --no-headers 2>/dev/null
+    ls -l /proc/$c/fd 2>/dev/null | grep -i "ttyS" || echo "      (未打开ttyS*)"
+  done
+done
+
+[C 段输出]
+== marm_controller MainPID=3644
+3644 Wed Nov 22 05:10:22 2023 /bin/bash /home/ubuntu/autoStartController.sh
+   exe=/usr/bin/bash
+   (bash自身未打开ttyS*)
+   -- 子进程 3734: /home/ubuntu/marm_code/build/marm_controller_node
+3734 Wed Nov 22 05:10:24 2023 /home/ubuntu/marm_code/build/marm_controller_node
+lrwx------. 1 ubuntu ubuntu 64 Nov 29 07:23 3 -> /dev/ttyS4
+== marm_communication MainPID=3641
+3641 Wed Nov 22 05:10:22 2023 /bin/bash /home/ubuntu/autoStartCommunication.sh
+   exe=/usr/bin/bash
+   (bash自身未打开ttyS*)
+   -- 子进程 3674: /home/ubuntu/marm_code/build/marm_communication_node
+3674 Wed Nov 22 05:10:23 2023 /home/ubuntu/marm_code/build/marm_communication_node
+      (未打开ttyS*)
+== marm_control MainPID=3642
+3642 Wed Nov 22 05:10:22 2023 /bin/bash /home/ubuntu/autoStartControl.sh
+   exe=/usr/bin/bash
+   (bash自身未打开ttyS*)
+   -- 子进程 3675: /home/ubuntu/marm_code/build/marm_control_node
+3675 Wed Nov 22 05:10:23 2023 /home/ubuntu/marm_code/build/marm_control_node
+      (未打开ttyS*)
+== marm_subscripber MainPID=3648
+3648 Wed Nov 22 05:10:22 2023 /bin/bash /home/ubuntu/autoStartSubscriber.sh
+   exe=/usr/bin/bash
+   (bash自身未打开ttyS*)
+   -- 子进程 3677: /home/ubuntu/marm_code/build/subscriber
+3677 Wed Nov 22 05:10:23 2023 /home/ubuntu/marm_code/build/subscriber
+      (未打开ttyS*)
+
+[GPIO]
+ls /sys/class/gpio/ 2>/dev/null
+export  gpio503  gpiochip410  gpiochip496  unexport
+cat /sys/class/gpio/gpio503/direction /sys/class/gpio/gpio503/value 2>/dev/null
+out
+1
+ls -l /sys/class/gpio/gpio503/device 2>/dev/null
+lrwxrwxrwx 1 root root 0 Nov 29 11:08 /sys/class/gpio/gpio503/device -> ../../../gpiochip0
+
+sudo cat /sys/kernel/debug/gpio 2>/dev/null | head -60
+gpiochip1: GPIOs 410-495, parent: platform/pinctrl@ff634480, periphs-banks:
+ gpio-433 (                    |ffe09080.usb3phy    ) out lo
+ gpio-434 (                    |ys485de             ) out lo
+ gpio-448 (                    |amlsd               ) out hi
+ gpio-463 (                    |RESET               ) out hi
+
+gpiochip0: GPIOs 496-511, parent: platform/pinctrl@ff800014, aobus-banks:
+ gpio-499 (                    |key                 ) in  hi
+ gpio-503 (                    |sysfs               ) out hi
+ gpio-507 (                    |?                   ) out hi
+
+sudo dmesg 2>/dev/null | grep -iE "gpio|ttyS|uart" | head -30
+[    0.000000] earlycon: aml-uart0 at MMIO 0x00000000ff803000 (options '')
+[    0.000000] bootconsole [aml-uart0] enabled
+[    0.000000] Kernel command line: init=/init console=ttyS0,115200 no_console_suspend earlycon=aml-uart,0xff803000 ramoops.pstore_en=1 ramoops.record_size=0x8000 ramoops.console_size=0x4000 hdr_policy=0 hdr_priority= otg_device=1 reboot_mode_android=normal logo=osd0,loaded,0x3d800000 fb_width=1920 fb_height=1080 display_bpp=16 outputmode=576cvbs vout=576cvbs,enable panel_type=lcd_1 lcd_ctrl=0x00000083 hdmitx=,444,8bit hdmimode=1080p60hz hdmichecksum=0x00000000 dolby_vision_on=0 frac_rate_policy=1 hdmi_read_edid=1 cvbsmode=576cvbs osd_reverse=0 video_reverse=0 irq_check_en=0 androidboot.selinux=enforcing androidboot.firstboot=1 jtag=disable androidboot.hardware=amlogic androidboot.bootloader=U-Boot 2015.01-g9983691-dirty androidboot.build.expect.baseband=N/A androidboot.serialno=1234567890 androidboot.wificountrycode=US androidboot.oem.key1=ATV00104319 rootfstype=ramfs root=/dev/system rootfstype=ext4 init=/init
+[    0.000000] irq_meson_gpio: 100 to 8 gpio interrupt mux initialized
+[    1.460911] of_get_named_gpiod_flags: parsed 'reset-gpio' property of node '/pcieA@fc000000[0]' - status (0)
+[    1.492638] amlogic-pcie-v2 fc000000.pcieA: normal gpio
+[    1.498073] amlogic-pcie-v2 fc000000.pcieA: GPIO normal: amlogic_pcie_assert_reset
+[    3.830944] GPIO lookup for consumer enable
+[    3.833253] using device tree for GPIO lookup gpiod_get_index
+[    3.839327] using lookup tables for GPIO lookup gpiod_get_index
+[    3.845531] lookup for GPIO enable failed gpiod_get_index
+[    4.101619] usbserial: USB Serial support registered for ch341-uart
+[    4.259688] Bluetooth: HCI UART driver ver 2.3
+[    4.264329] Bluetooth: HCI UART protocol H4 registered
+[    4.271418] of_get_named_gpiod_flags: parsed 'gpios' property of node '/gpioleds/sys_led[0]' - status (0)
+[    4.360592] meson_uart ff803000.serial: ==uart0 reg addr = ffffff80083e8000
+[    4.367784] ff803000.serial: ttyS0 at MMIO 0xff803000 (irq = 25, base_baud = 1500000) is a meson_uart
+[    4.382780] meson_uart ff803000.serial: ttyS0 use xtal(24M) 24000000 change 0 to 115200
+[    4.385441] console [ttyS0] enabled
+[    4.392700] bootconsole [aml-uart0] disabled
+[    4.401861] GPIO lookup for consumer ys485de
+[    4.405956] using device tree for GPIO lookup gpiod_get_index
+[    4.411947] of_get_named_gpiod_flags: parsed 'ys485de-gpios' property of node '/soc/aobus@ff800000/serial@4000[0]' - status (0)
+[    4.423559] get the desc successful gpiod_get_index
+[    4.433538] meson_uart ff804000.serial: ==uart4 reg addr = ffffff80083ea000
+[    4.440660] ff804000.serial: ttyS4 at MMIO 0xff804000 (irq = 26, base_baud = 1500000) is a meson_uart
+[    4.450405] meson_uart ffd24000.serial: ==uart1 reg addr = ffffff80083ec000
+[    4.457124] ffd24000.serial: ttyS1 at MMIO 0xffd24000 (irq = 40, base_baud = 1500000) is a meson_uart
+[    4.477744] GPIO lookup for consumer (null)
+[    4.481619] using device tree for GPIO lookup gpiod_get_index
+
+grep -rn "gpio\|503" /home/ubuntu/*.sh /etc/rc.local 2>/dev/null
+/etc/rc.local:3:`echo 503 > /sys/class/gpio/export`
+/etc/rc.local:4:`echo out > /sys/class/gpio/gpio503/direction`
+/etc/rc.local:5:`echo 1 > /sys/class/gpio/gpio503/value`
+说明：以上为 grep 打印的文件内容，未执行其中的 GPIO 写命令。
+
+[收尾]
+date; uname -a
+Wed Nov 29 11:11:58 CST 2023
+Linux unitree 4.9.113 #12 SMP PREEMPT Thu Nov 28 12:00:37 CST 2024 aarch64 aarch64 aarch64 GNU/Linux
+Thomas 对姿态的确认：状态无变化
+Thomas 执行 exit 后确认：已返回
+
+[额外授权：离线安装 fuser]
+Thomas：`fuser` 我允许你装
+Thomas：机械臂是没有联网的 上位机下载然后传输安装还差不多
+
+在 上位机 执行的查询命令：
+ssh ubuntu@<ARM_IP> 'apt-cache policy psmisc'
+psmisc:
+  Installed: (none)
+  Candidate: 23.3-1
+  Version table:
+     23.3-1 500
+        500 https://mirrors.ustc.edu.cn/ubuntu-ports focal/main arm64 Packages
+
+ssh ubuntu@<ARM_IP> "apt-cache show psmisc=23.3-1 | grep -E '^(Filename|Size|SHA256):'"
+Filename: pool/main/p/psmisc/psmisc_23.3-1_arm64.deb
+Size: 51208
+SHA256: a902262d23d78ba233963f80cf6d7c2bee4c92f113500ece670258be9642231c
+
+[上位机 下载]
+curl -fL --output /tmp/psmisc_23.3-1_arm64.deb https://mirrors.ustc.edu.cn/ubuntu-ports/pool/main/p/psmisc/psmisc_23.3-1_arm64.deb
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+100 51208  100 51208    0     0   622k      0 --:--:-- --:--:-- --:--:--  625k
+
+sha256sum /tmp/psmisc_23.3-1_arm64.deb
+a902262d23d78ba233963f80cf6d7c2bee4c92f113500ece670258be9642231c  /tmp/psmisc_23.3-1_arm64.deb
+
+Thomas 后续授权：我授权给你权限 可以直接去做
+说明：交叉评审方 代传尝试没有成功证据；其失败情况见 README。Thomas 最终执行下列传输/安装，未提供终端输出。
+scp /tmp/psmisc_23.3-1_arm64.deb ubuntu@<ARM_IP>:/tmp/
+Thomas：传输完成
+ssh -t ubuntu@<ARM_IP> 'sudo dpkg -i /tmp/psmisc_23.3-1_arm64.deb'
+Thomas：完成
+
+[安装后占用查询：Thomas 粘贴，臂机提示符下执行]
+ubuntu@unitree:~$ sudo fuser -v /dev/ttyS4
+                     USER        PID ACCESS COMMAND
+/dev/ttyS4:          ubuntu     3734 F.... marm_controller
+
+[Type-C：Mac]
+Thomas：接好了 然后呢
+system_profiler SPUSBDataType
+USB:
+
+    USB 3.1 Bus:
+
+      Host Controller Driver: AppleT8132USBXHCI
+
+    USB 3.1 Bus:
+
+      Host Controller Driver: AppleT8132USBXHCI
+
+        USB 2.0 Hub:
+
+          Product ID: 0x0101
+          Vendor ID: 0x1a40  (TERMINUS TECHNOLOGY INC.)
+          Version: 1.11
+          Speed: Up to 480 Mb/s
+          Location ID: 0x02100000 / 1
+          Current Available (mA): 500
+          Current Required (mA): 100
+          Extra Operating Current (mA): 0
+
+            CP2102N USB to UART Bridge Controller:
+
+              Product ID: 0xea60
+              Vendor ID: 0x10c4  (Silicon Laboratories, Inc.)
+              Version: 1.00
+              Serial Number: <REDACTED>
+              Speed: Up to 12 Mb/s
+              Manufacturer: Silicon Labs
+              Location ID: 0x02120000 / 2
+              Current Available (mA): 500
+              Current Required (mA): 100
+              Extra Operating Current (mA): 0
+
+    USB 3.1 Bus:
+
+      Host Controller Driver: AppleT8132USBXHCI
+
+向导要求拔线后再次执行 system_profiler SPUSBDataType；未收到第二次原始输出。
+Thomas：确认消失
+
+[额外网页工具观察：口述]
+Thomas：工具列出该串口 但是 没有舵机在线
+说明：网页 URL、工具版本、参数、原始日志和截图均未提供。
