@@ -1,0 +1,79 @@
+日期：2026-10-28；执行人：Thomas。
+来源：会话粘贴和口述；终端富文本换行已整理。未提供完整自动采集日志和各步骤时分。
+
+[前置确认]
+向导要求：机械臂静止、工作区无人无杂物、急停在手边，上位机 无示教器/驱动节点/任务下发命令。
+Thomas：满足
+
+[停止]
+下发给 Thomas 的命令：
+sudo systemctl stop marm_controller marm_communication marm_control marm_subscripber
+Thomas：无输出
+
+[停止验证：Thomas 粘贴]
+systemctl is-active marm_controller marm_communication marm_control marm_subscripber
+inactive
+inactive
+inactive
+inactive
+ubuntu@unitree:~$ pgrep -af marm
+ubuntu@unitree:~$ sudo fuser -v /dev/ttyS4
+
+[保持阶段：最初口述有误，已被后续截图与更正撤回]
+向导要求：保持 60 秒，查询 sudo fuser -v /dev/ttyS4。
+Thomas：拍视频 是多次一举 机械臂本来就在静止折叠状态  sudo fuser -v /dev/ttyS  返回 4 然后呢
+向导追问：是命令末尾 ttyS4 的 4，还是执行后输出一行 4？
+Thomas：执行后真的输出了一行 `4`
+记录说明：此处“输出 4”的口述已撤回，不再作为失败证据；以文末补充更正为准。
+
+[恢复验证：Thomas 粘贴]
+sudo systemctl start marm_controller marm_communication marm_control marm_subscripber
+ubuntu@unitree:~$ sleep 2
+ubuntu@unitree:~$ systemctl is-active marm_controller marm_communication marm_control marm_subscripber
+active
+active
+active
+active
+ubuntu@unitree:~$ pgrep -af marm
+301905 /home/ubuntu/marm_code/build/marm_communication_node
+301907 /home/ubuntu/marm_code/build/marm_control_node
+301909 /home/ubuntu/marm_code/build/subscriber
+301937 /home/ubuntu/marm_code/build/marm_controller_node
+ubuntu@unitree:~$ systemctl is-enabled marm_controller marm_communication marm_control marm_subscripber
+enabled
+enabled
+enabled
+enabled
+
+[Thomas 补充更正及截图]
+Thomas：停 我回复错了 你看 其实没有输出 过了1分钟也没有 所以你到底想验证什么
+后续指示：更正
+
+附件一保存为：证据-01-停止验证.png
+附件二保存为：证据-02-保持后验证.png
+
+截图可见内容转录（原图为直接证据；一分钟间隔依据 Thomas 上述说明）：
+两图上部显示四服务 active、四进程 PID 301905/301907/301909/301937，fuser 显示 controller PID 301937 占用 ttyS4。
+随后执行：
+sudo systemctl stop marm_controller marm_communication marm_control marm_subscripber
+systemctl is-active marm_controller marm_communication marm_control marm_subscripber
+inactive
+inactive
+inactive
+inactive
+pgrep -af marm
+（无输出）
+sudo fuser -v /dev/ttyS4
+（无输出）
+
+第二张截图在上述查询之后还显示：
+sudo fuser -v /dev/ttyS4
+（无输出）
+systemctl is-active marm_controller marm_communication marm_control marm_subscripber
+inactive
+inactive
+inactive
+inactive
+
+更正：撤回 P2 失败；一分钟串口空闲检查通过。截图中的 stop 位于历史恢复 PID 出现之后，最新可见服务状态为 inactive，最新停止后的恢复未提供证据。
+Thomas 已要求停，未继续发出或执行恢复命令。

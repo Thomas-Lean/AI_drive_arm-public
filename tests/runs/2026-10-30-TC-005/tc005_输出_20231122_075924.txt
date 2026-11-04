@@ -1,0 +1,68 @@
+TC-005 指令间隔语义与同步监控耗时（板载时钟 20231122_075925，仅参考）
+!! 本脚本只发只读指令（0x01/0x16/0x19+0x16），不发任何运动指令
+!! 前置检查：4 服务 inactive + /dev/ttyS4 无占用（复审 H1）
+   preflight: 服务 4×inactive
+   preflight: /dev/ttyS4 无占用
+日志: /home/ubuntu/p04_probes/tc005_log_20231122_075925.jsonl
+!! 等回包窗（B3 裁定·二 2026-10-30）：A/B 阶段均固定 20ms，>20ms 才计 timeout；依据 F41 jsonl 全量复核（最大 14.4ms 的 1.4 倍），密集档实际发出间隔逐条如实记录
+-- 预检：ping J6 / J5 各 2 次（间隔 50ms）
+   ping J6: ok
+   ping J5: ok
+   ping J6: ok
+   ping J5: ok
+===== 阶段A：单舵机(J6)定频 0x16 =====
+A 周期=20ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  20.0ms 软件间隔中位   6.2ms rtt中位 11.8ms
+   A 周期=20ms J6 rtt 分布: n=150 中位 11.8ms p95 11.9ms max 12.2ms | 前序发出间隔中位 20.0ms
+A 周期=15ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  15.0ms 软件间隔中位   2.4ms rtt中位 11.6ms
+   A 周期=15ms J6 rtt 分布: n=150 中位 11.6ms p95 13.4ms max 14.0ms | 前序发出间隔中位 15.0ms
+A 周期=12ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   0.1ms rtt中位 11.1ms
+   A 周期=12ms J6 rtt 分布: n=150 中位 11.1ms p95 11.5ms max 14.0ms | 前序发出间隔中位 12.0ms
+A 周期=10ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   0.1ms rtt中位 11.1ms
+   A 周期=10ms J6 rtt 分布: n=150 中位 11.1ms p95 12.7ms max 15.5ms | 前序发出间隔中位 12.0ms
+A 周期= 8ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   0.1ms rtt中位 11.0ms
+   A 周期= 8ms J6 rtt 分布: n=150 中位 11.0ms p95 12.6ms max 13.8ms | 前序发出间隔中位 12.0ms
+A 周期= 6ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   0.1ms rtt中位 11.1ms
+   A 周期= 6ms J6 rtt 分布: n=150 中位 11.1ms p95 12.3ms max 15.5ms | 前序发出间隔中位 12.0ms
+A J6 rtt×前序发出间隔 [s2s≤12ms]: n=292 中位 11.2ms p95 12.6ms max 15.5ms
+A J6 rtt×前序发出间隔 [s2s>12ms]: n=607 中位 11.1ms p95 12.7ms max 15.5ms
+===== 阶段B：J6/J5 交替 0x16（同舵机间隔 ≈ 2×命令间隔）=====
+B 周期=12ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   1.4ms rtt中位  9.7ms
+   B 周期=12ms J5 rtt 分布: n=75 中位 9.7ms p95 10.3ms max 10.6ms | 前序发出间隔中位 12.0ms
+   B 周期=12ms J6 rtt 分布: n=75 中位 9.7ms p95 10.4ms max 10.8ms | 前序发出间隔中位 12.0ms
+B 周期=10ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   0.1ms rtt中位 10.3ms
+   B 周期=10ms J5 rtt 分布: n=75 中位 10.4ms p95 12.7ms max 14.3ms | 前序发出间隔中位 12.0ms
+   B 周期=10ms J6 rtt 分布: n=75 中位 10.3ms p95 11.1ms max 11.9ms | 前序发出间隔中位 12.1ms
+B 周期= 8ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   0.1ms rtt中位 11.1ms
+   B 周期= 8ms J5 rtt 分布: n=75 中位 11.1ms p95 12.7ms max 15.4ms | 前序发出间隔中位 12.0ms
+   B 周期= 8ms J6 rtt 分布: n=75 中位 11.1ms p95 11.8ms max 14.0ms | 前序发出间隔中位 12.0ms
+B 周期= 6ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   0.1ms rtt中位 11.1ms
+   B 周期= 6ms J5 rtt 分布: n=75 中位 11.2ms p95 11.3ms max 11.7ms | 前序发出间隔中位 11.9ms
+   B 周期= 6ms J6 rtt 分布: n=75 中位 11.0ms p95 11.2ms max 11.8ms | 前序发出间隔中位 12.1ms
+B 周期= 5ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   0.1ms rtt中位 11.1ms
+   B 周期= 5ms J5 rtt 分布: n=75 中位 11.1ms p95 11.7ms max 13.5ms | 前序发出间隔中位 12.0ms
+   B 周期= 5ms J6 rtt 分布: n=75 中位 11.1ms p95 12.3ms max 15.1ms | 前序发出间隔中位 12.0ms
+B 周期= 4ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   0.1ms rtt中位 11.1ms
+   B 周期= 4ms J5 rtt 分布: n=75 中位 11.2ms p95 12.7ms max 12.9ms | 前序发出间隔中位 11.9ms
+   B 周期= 4ms J6 rtt 分布: n=75 中位 11.0ms p95 11.2ms max 12.6ms | 前序发出间隔中位 12.1ms
+B 周期= 3ms n=150 ok=150 timeout=  0 corrupt=  0 bad_len=  0 id_mismatch=  0 late=0 | 实测发出间隔中位  12.0ms 软件间隔中位   0.1ms rtt中位 11.1ms
+   B 周期= 3ms J5 rtt 分布: n=75 中位 11.0ms p95 12.5ms max 13.0ms | 前序发出间隔中位 12.0ms
+   B 周期= 3ms J6 rtt 分布: n=75 中位 11.1ms p95 12.0ms max 15.3ms | 前序发出间隔中位 12.0ms
+B J5 rtt×前序发出间隔 [s2s≤12ms]: n=309 中位 11.1ms p95 12.6ms max 14.3ms
+B J5 rtt×前序发出间隔 [s2s>12ms]: n=216 中位 11.0ms p95 11.7ms max 15.4ms
+B J6 rtt×前序发出间隔 [s2s≤12ms]: n=218 中位 11.1ms p95 11.7ms max 15.3ms
+B J6 rtt×前序发出间隔 [s2s>12ms]: n=306 中位 10.9ms p95 11.2ms max 15.1ms
+===== 阶段C：0x19+0x16 d=1 同步监控（只读，每级须见到成功才升级）=====
+n=1 ×20 周期 25ms: 收齐率 20/20, 总耗时中位 11.8ms p90 15.0ms p99 16.0ms max 16.0ms | 请求起点间隔中位 25.0ms max 25.1ms 超期(>1.5×周期) 0 次 | extra=0 bad=0
+n=2 ×20 周期 25ms: 收齐率 20/20, 总耗时中位 17.5ms p90 18.7ms p99 18.8ms max 18.8ms | 请求起点间隔中位 25.0ms max 25.2ms 超期(>1.5×周期) 0 次 | extra=0 bad=0
+7 轴请求帧(首帧) = 124c190a16010700010203040506b4（预期 12 4c 19 0a 16 01 07 00 01 02 03 04 05 06 cs）
+   …200/1000 周期
+   …400/1000 周期
+   …600/1000 周期
+   …800/1000 周期
+   …1000/1000 周期
+n=7 ×1000 周期 25ms: 收齐率 1000/1000, 总耗时中位 16.4ms p90 22.5ms p99 25.0ms max 33.9ms | 请求起点间隔中位 25.0ms max 34.5ms 超期(>1.5×周期) 0 次 | extra=0 bad=0
+===== SUMMARY =====
+SUMMARY 逐条数据与各档速率见日志 /home/ubuntu/p04_probes/tc005_log_20231122_075925.jsonl（判定与 Q4/Q6 决议由 执行方 离线分析给出，结论分支含「不可辨识/未观察到门限」，不作超范围归因）
+-- 收尾健康检查：ping J6/J5（间隔 50ms）
+   ping J6: ok
+   ping J5: ok
