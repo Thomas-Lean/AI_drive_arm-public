@@ -1,3 +1,10 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# 编译与安装产物
+build/
+*.egg-info/
+
+# 示教回放生成的点位文件
+tools/arm_client/points.json

@@ -1,24 +1,143 @@
-# AI_drive_arm（研究成果版）
+# AI_drive_arm
 
-宇树 Unitree D1-T 桌面机械臂的能力摸底研究记录。项目最终目标：**遥操作采集示范 → 训练 ACT → 实机凭腕部相机自主抓起一瓶 330 ml 瓶装水，10 次 ≥ 6 次成功。**
+宇树 Unitree D1-T 桌面舵机臂（6 轴 + 夹爪）的**开源臂载控制器与上位机 SDK**，当前版本 **v0.1.0**。
 
-本仓库是项目的公开版，只收录到 M0「臂能力摸底」阶段为止的研究成果：事实表、决策记录、分析报告、测试用例、测试脚本和精选的原始数据。控制器重写、遥操作、训练等后续阶段尚未开始。
+- **臂载控制器 `d1t_arm_ctrl`**（C++17）：替换臂上原厂的 4 个服务。单线程独占舵机总线，
+  20 Hz 关节流式 + 七轴同步反馈；看门狗、软急停、限位限速、多圈检查、夹爪过温保护。
+  同一份代码带 `--sim` 假舵机，没有臂也能跑。
+- **上位机 SDK `d1t_sdk`**（Python）：FK/IK、关节五次多项式、末端直线、帧同步流式；
+  接口与 d1arm_sdk 同名同参同单位，底层经 Cyclone DDS 0.10.2 直连臂上控制器，不起服务。
+- **部署脚本**：仿真与实机各几条命令，不用手写 DDS 配置；**MuJoCo 只读 3D 显示** `tools/arm_viz`。
 
-## 1. 硬件
+项目最终目标是「遥操作采集示范 → 训练模仿学习策略（ACT）→ 实机凭腕部相机自主抓取」；
+本版交付的是这条路线的底座：可流式控制、可仿真、可复现的控制器与 SDK。
 
-| 部件 | 说明 |
+## 1. 硬件前提
+
+| 部件 | 要求 |
 |---|---|
-| 机械臂 | Unitree D1-T，6 轴 + 夹爪，关节编号 J0–J6（J6 = 夹爪） |
-| 舵机 | 7 颗 FashionStar 总线舵机：J0–J2 为 RX18-U100H-M，J3–J6 为 HX8-U50H-M；固件已升级到 V330（ADR-004） |
-| 臂载计算机 | aarch64 / Ubuntu 20.04，经 /dev/ttyS4 @115200 直挂舵机总线（F18、F28、F29） |
-| 相机 | RealSense D435i，腕部安装 |
-| 抓取物 | 330 ml 瓶装水，378 g，夹持截面直径 56 mm（F55） |
+| 机械臂 | 宇树 Unitree D1-T，6 轴 + 夹爪，关节编号 J0–J6（J6 = 夹爪） |
+| 舵机 | 7 颗 FashionStar 总线舵机（J0–J2 RX18-U100H-M，J3–J6 HX8-U50H-M），**固件必须 V330**：出厂 V311 不支持本控制器依赖的 0x16 / 0x18 / 0x19 指令（F34、F35）。升级步骤见 [`deploy/舵机升级.md`](deploy/舵机升级.md) |
+| 臂载计算机 | 随臂出厂：aarch64、Ubuntu 20.04、4 核 Cortex-A55（F18、F28），经 `/dev/ttyS4` @115200 直挂舵机总线（F29）；自带 Cyclone DDS C++，本控制器直接在其上编译运行（F62、F65） |
+| 上位机 | Ubuntu 22.04 LTS，x86_64（已验证机型：Ubuntu 22.04.5 LTS，x86_64，机械革命 MECHREVO 极光 JIGUANG Series 笔记本，Intel Core i7-13645HX）；与臂网线直连，同网段 192.168.123.0/24（臂默认 192.168.123.100）；Python ≥ 3.8 |
 
-完整设备与路线见 [`docs/ROADMAP.md`](docs/ROADMAP.md)。
+## 2. 与原厂控制器 / SDK 的区别
 
-## 2. 做了哪些研究
+| 维度 | 原厂控制器 + 原厂 SDK | 本项目控制器 + d1t_sdk |
+|---|---|---|
+| 反馈频率 | 实测约 9 Hz：定时器 `sleep(100)` 后对 7 颗舵机逐个串行查询（F1；文档标称 10 Hz，宇树文档中心 D1 机械臂服务页） | 20 Hz；七轴一次同步读回，一轮中位约 15–16 ms（F46、F72） |
+| 反馈内容 | 只有七轴角度；逐个查询、非同一时刻，无采样时间戳（F6、F23） | 七轴角度、电流、温度、电压、状态位同一次读回；每帧带序号、时间戳、故障 / 告警位（F12、F46、F66；字段见 `arm_onboard/controller/idl/d1t_arm.idl`） |
+| 串口访问 | 命令回调与定时查询共用一个串口对象，整个收发事务没有统一互斥（F2）；曾观察到反馈断帧 0.4–0.6 s，与串口竞争的因果未确认（F3） | 只有主循环一个线程碰串口，按 50 ms 固定周期先发后读；实机流式序号缺号 0、七轴新鲜率 ≥ 99.85%（F65、F72） |
+| 命令方式 | DDS 话题 `rt/arm_Command` 收 JSON 字符串命令：单关节「目标角 + 时长」、全关节一次性目标（两档平滑）、使能卸力、供电开关、归零；原厂 SDK 是依赖 unitree_sdk2 的 C++ 示例程序（宇树文档中心 D1 机械臂服务页）。臂上每条关节命令按剩余行程重算速度后交给舵机自行走（F4；原厂源码 marm_communication_node.cpp:153–218） | 关节流式 20 Hz：上位机每收到一帧状态发一条七轴目标，避免两边时钟漂移造成的顿挫（F73） |
+| 规划 | 原厂接口只有关节角度、使能卸力、供电、归零，没有 IK、笛卡尔直线 / 圆弧或轨迹规划（宇树文档中心 D1 机械臂服务页）；臂上程序收到位姿命令只解析、不执行（原厂源码 marm_communication_node.cpp:219–244） | 上位机 SDK：FK / IK、关节五次多项式、末端直线；圆弧 `move_c` 有实现但未做实机验收（离线测试见 `sdk/tests`） |
+| 安全 | 无软急停，唯一急停是断电（F5）：文档称供电开关可作急停，臂上程序未实现（原厂源码 marm_communication_node.cpp:284–292）；有限位钳制（F7）与按行程限速（F4）；多圈角超 ±180° 时转阻尼（F58）；源码中没有断命令超时停臂的逻辑；无碰撞检查 | 看门狗：流式断命令约 0.3 s 停臂；软急停：ESTOP 位 111 ms、各轴停住 129 ms（F67）；限位与限速（各轴 100°/s，F80）；J6 45 ℃ 降出力（F70）、50 ℃ 释放；停住确认（F68）；无碰撞检查（同原厂） |
+| 舵机固件 | 出厂 V311 即可运行（F34） | 需 V330（0x16 / 0x18 / 0x19，F34、F35） |
+| 仿真 | 只提供 URDF / STEP 模型供用户自建仿真，没有假舵机或仿真控制器模式（宇树文档中心 D1 机械臂服务页）；臂上程序直接打开 `/dev/ttyS4`（F2） | 同一控制器 `--sim` 假舵机（可注入丢包、坏帧、过温、多圈）+ MuJoCo 只读显示，方向已与真臂核对（F75、F81） |
 
-M0 把臂的能力拆成七个维度逐项摸底（ROADMAP §4.0），共 8 个测试用例：
+- F 编号见 [`docs/FACTS.md`](docs/FACTS.md)（每条带证据出处）。
+- 「原厂源码」指随臂出厂的臂上程序（版权归厂商，本仓库不收录），行号为本项目留存的拷贝。
+- 「宇树文档中心 D1 机械臂服务页」= https://support.unitree.com/home/zh/developer/D1Arm_services （原厂接口、SDK 与仿真资料的出处）。
+
+## 3. 适合做什么，不适合做什么
+
+**适合**
+
+- 遥操作采集示范数据（20 Hz 七轴同步状态 + 关节流式命令）。
+- 学习类策略（ACT 等）在 20 Hz 关节流式上的部署。
+- 教学与二次开发：控制器状态机、协议和保护逻辑都有源码和测试，`--sim` 可无臂调试。
+
+**不适合**
+
+- 要求毫米级绝对定位：重力会让末端下沉约 1 cm，零位偏移也未精标（见第 5 节）。
+- 高速运动：超过约 100°/s 会触发舵机自身保护（F80）。
+- 力控：舵机只有位置模式；夹持力靠舵机功率保护与温度守卫兜底。
+
+## 4. 快速开始
+
+### 4.1 仿真（无臂）
+
+```bash
+git clone https://github.com/Thomas-Lean/AI_drive_arm-public.git
+cd AI_drive_arm-public
+bash deploy/setup_host.sh          # 装 Cyclone DDS 0.10.2 与 Python 依赖；已装的自动跳过
+source deploy/env.sh sim
+bash deploy/sim_start.sh           # 终端 1：起仿真控制器（首次自动编译 + 跑测试），Ctrl-C 退出
+```
+
+另开终端 2：
+
+```bash
+cd AI_drive_arm-public
+source deploy/env.sh sim           # 自动设 DDS 配置 / 库路径 / PYTHONPATH
+python3 sdk/examples/01_read_state.py     # 打印状态，online 七个 True
+python3 sdk/examples/02_move_joints.py    # 关节运动
+python3 sdk/examples/03_gripper.py        # 夹爪开合
+python3 sdk/examples/04_line_arc.py       # 末端直线 + 圆弧
+python3 sdk/examples/05_stream.py         # 关节流式
+```
+
+全程不手写 DDS URI。fish 用户先敲 `bash`。详见 [`deploy/虚拟部署.md`](deploy/虚拟部署.md)；
+3D 显示见 [`tools/arm_viz/README.md`](tools/arm_viz/README.md)。
+
+### 4.2 实机
+
+先确认舵机固件 V330，并通读 [`deploy/实机部署.md`](deploy/实机部署.md)（首次上臂要做方向 / 零位检查）。
+
+```bash
+# 上位机仓库根：把控制器源码与脚本拷到臂上 ~/d1t
+tar czf - --exclude=build arm_onboard/controller deploy | ssh ubuntu@192.168.123.100 'mkdir -p ~/d1t && tar xzf - -C ~/d1t'
+
+# 臂载计算机上
+cd ~/d1t
+bash deploy/arm_install.sh                        # 编译 + 测试
+bash deploy/arm_start.sh <臂上网卡名> <上位机IP>    # 停原厂 4 服务，前台起控制器
+
+# 上位机
+source deploy/env.sh real <本机接臂的网卡名>
+python3 sdk/examples/01_read_state.py
+
+# 用完回原厂（臂上）
+bash deploy/arm_restore.sh
+```
+
+**安全**：动之前确认摆位不碰桌面 / 自身，物理急停在手边；中止 = 发送端 Ctrl-C（看门狗约 0.3 s 停臂）；
+`free_all()` 后臂会掉，先托住。逐项验收见 [`sdk/实机验收清单.md`](sdk/实机验收清单.md)。
+本仓库不对实机使用后果负责（见 LICENSE）。
+
+## 5. 已知限制
+
+| # | 限制 | 说明 |
+|---|---|---|
+| 1 | 速度上限约 100°/s | 舵机额定 210 / 312°/s，但快速往返（峰值 185–235°/s）数轮后触发舵机保护；控制器与 SDK 各轴限速 100°/s（F80） |
+| 2 | 偶发缺回包 | 同步读回时偶发部分舵机没回包（J3–J6 整段或只缺 J6），原因未查明，断电后清零。已改到不再引起流式顿挫；缺包那一帧该轴读数沿用上次值，下一帧跳回（F79） |
+| 3 | 进 HOLD 那一帧超时 | 每次进入保持要逐轴发 7 帧停止指令，该周期约 43 ms 超时一次；连续流式中不出现（F79） |
+| 4 | 重力下沉约 1 cm | J2 受重力压低约 0.9°（带载约 1.4°，F76、F61），末端绝对高度偏低约 1 cm（实机直线验收观察），伸得越远越大；SDK 不补偿。每个新进程从实测角起步，跨脚本连续运行会累积少量下沉 |
+| 5 | J4≈90° 保持自激 | 手腕水平伸出时保持会自激抖动，触发 HOLD_FAIL 故障（`reset()` 可恢复）；示教点与起始姿态要避开（F78） |
+| 6 | 失力示教锁住会跳 | 失力时臂挂在重力上，锁住时舵机拉回保持位，跳约 1–1.6°（实机验收观察，未单列事实编号） |
+| 7 | 绝对精度 | 关节方向已与真臂核对（F81），零位偏移未精标：FK / IK 绝对位置按 ±1 cm 量级预期，相对运动形状不受影响 |
+| 8 | 未做实机验收的功能 | 圆弧 `move_c`；流式带夹爪目标 `j6_deg`；J6 50 ℃ 释放（实机未触发过，F70）；可选开机自启服务 `deploy/d1t-arm-ctrl.service` |
+| 9 | 无碰撞检查、无力控 | 只有关节限位；夹持力靠舵机功率保护 + 温度守卫（45 ℃ 降出力 / 50 ℃ 释放） |
+| 10 | 硬件前提 | 只在 D1-T + 舵机固件 V330 上验证过（F34、F35）；V311 下控制器无法工作 |
+
+## 6. 目录
+
+```
+arm_onboard/controller/   臂载控制器 d1t_arm_ctrl（C++17；src/、idl/、tests/，含 --sim 仿真）
+sdk/                      上位机 SDK d1t_sdk（examples/ 示例、tests/ 离线测试、arm_model/ 臂参数与 URDF）
+tools/arm_viz/            MuJoCo 只读 3D 显示（只订阅状态，不发命令）
+tools/arm_client/         维修工具：发命令 / 录状态 / 盯 J6 温度
+deploy/                   部署脚本与文档：setup_host / env.sh / sim_start（上位机），
+                          arm_install / arm_start / arm_restore（臂上），虚拟部署 / 实机部署 / 舵机升级
+tests/scripts/            实机验收与诊断脚本（方向核对、示教直线 / 流式、回放、缺包监视、流式连续性复算）
+                          以及研究记录阶段的总线测试脚本
+docs/FACTS.md             事实表：F 编号与证据出处
+docs/  tests/cases/  tests/runs/   研究记录（见第 7 节）
+CHANGELOG.md              版本记录
+```
+
+## 7. 研究记录（M0：臂能力摸底）
+
+控制器重写之前，项目先把 D1-T 的能力拆成七个维度逐项摸底，共 8 个测试用例：
 
 | 用例 | 内容 |
 |---|---|
@@ -32,10 +151,8 @@ M0 把臂的能力拆成七个维度逐项摸底（ROADMAP §4.0），共 8 个�
 | TC-009 | 夹爪夹持特性采集 |
 
 另有三份专题分析：臂载计算机（Q7）、零位（Q8）、电源（Q9）。
-
-## 3. 主要结论
-
-总结论见 [`docs/analysis/P0.6-臂能力评估报告.md`](docs/analysis/P0.6-臂能力评估报告.md)（草稿 v0.1）：**D1-T 现有能力足以支撑「遥操作 + ACT + 腕部相机」路线。** 要点：
+总结论见 [`docs/analysis/P0.6-臂能力评估报告.md`](docs/analysis/P0.6-臂能力评估报告.md)：
+**D1-T 现有能力足以支撑「遥操作 + ACT + 腕部相机」路线**。要点：
 
 1. **通信**：舵机出厂固件 V311 不支持 0x16 / 0x18 / 0x19（F34），升级到 V330 后全部可用（F35、F41）。7 轴同步监控一轮中位 16.4 ms、p99 25.0 ms，按 20 Hz 设计有余量（F46）。厂商控制器约 9 Hz 的反馈频率来自程序里的 `sleep(100)` 与串行查询，不是总线上限（F1、F25）。
 2. **运动质量**：流式下发不会每条从零起步，但存在与指令周期同频、约 15–25% 的速度起伏（F54）；带瓶同步运动中档 6 轴到位时间差 0.04–0.07 s（F61）。
@@ -43,51 +160,38 @@ M0 把臂的能力拆成七个维度逐项摸底（ROADMAP §4.0），共 8 个�
 4. **负载与夹爪**：夹 378 g 瓶子往返 6 次不松动；空夹 / 夹瓶按停住角可完全区分（F60、F61）。保持电流约 325 mA 时 J6 约 74 s 升到 44.5 ℃（F61）。
 5. **安全**：0x18 保持 / 释放 / 阻尼三种模式实测生效，可做软急停（F48、F49）。发现 J6 多圈角度漂移会导致反向堵转过温，已查清根因并写入运动前检查规程（F58）。
 
-所有事实以 [`docs/FACTS.md`](docs/FACTS.md) 的 F 编号为准；没有实测证据的结论在文中标【未验证】。
-
-## 4. 目录说明
+研究记录的文件：
 
 ```
-docs/
-  FACTS.md                       关键事实表（F 编号，唯一事实源）
-  ROADMAP.md                     技术路线（公开精简版：目标、设备、里程碑、风险）
-  adr/                           架构决策记录（ADR-002 控制器位置、ADR-004 固件升级）
-  analysis/                      分析报告（P0.6 评估报告、Q7/Q8/Q9 专题）
-  hardware/Servo Motor/PROTOCOL_NOTES.md   FashionStar 舵机协议笔记（本项目自写）
-tests/
-  cases/                         测试用例（TC-001～009）
-  scripts/                       测试脚本（Python 3 + pyserial）及离线自检 fsbus_selftest.py
-  runs/                          原始数据（每个用例精选一轮，附原 README）
+docs/ROADMAP.md                          技术路线（公开精简版：目标、设备、里程碑、风险）
+docs/adr/                                架构决策记录（ADR-002 控制器位置、ADR-004 固件升级）
+docs/analysis/                           分析报告（P0.6 评估报告、Q7/Q8/Q9 专题）
+docs/hardware/Servo Motor/PROTOCOL_NOTES.md   FashionStar 舵机协议笔记（本项目自写）
+tests/cases/                             测试用例（TC-001～009）
+tests/scripts/                           测试脚本（Python 3 + pyserial）及离线自检 fsbus_selftest.py
+tests/runs/                              原始数据（每个用例精选一轮，附原 README）
 ```
 
-`tests/runs/` 的收录说明：
+收录与阅读说明：
 
-- 每个用例只收一轮有代表性的完整数据，各目录 README 原样保留，所以 README 里会提到未收录的其他轮次文件。
-- TC-008 收 `2026-11-03-TC-008/` 中 053455/053456 这一轮完整运行；TC-009 收 `v2/` 中 051225 这一轮，另收 051531 轮的 samples CSV（自检脚本回放要用）。
-- 截图类证据（TC-002 现场截图、V330 升级过程截图、与厂家的聊天截图）未收录。
+- 每个用例只收一轮有代表性的完整数据，各目录 README 原样保留，所以 README 里会提到未收录的其他轮次文件；事实表证据列里引用的后续阶段数据目录也未收录。
+- TC-008 收 `2026-11-03-TC-008/` 中 053455/053456 这一轮完整运行；TC-009 收 `v2/` 中 051225 这一轮，另收 051531 轮的 samples CSV（自检脚本回放要用）。截图类证据未收录。
 - 数据文件名与 jsonl 中的时间戳来自臂载计算机板载时钟（停在 2023-11 前后），只用于区分轮次；实际日期以各 README 为准。
+- 文中 `<ARM_IP>`、`<HOST_IP>`、`<ARM_SUBNET>` 等为去敏占位符；`<旧项目仓库>` 指本项目之前一轮的私有仓库（未公开），`<REDACTED>` 为删去的设备序列号。
+- 「上位机」指与臂网线直连的主控电脑；「执行方 / 审查方 / 交叉评审方」是项目内部的分工角色（出数据 / 复算定论 / 交叉复审），「项目负责人」负责实机操作与裁定。研究记录原文里出现的人名即项目负责人。
+- 文中提到的 `arm_onboard/as_deployed/`（臂上原厂程序备份）、`docs/archive/`、`docs/ASSETS.md`、说明书 PDF、内部草案等未公开，链接会失效，这是有意的。
 
-### 阅读约定
-
-- 文中 `<ARM_IP>`、`<HOST_IP>`、`<ARM_SUBNET>` 等为去敏占位符，请换成自己的网络地址；`<旧项目仓库>` 指本项目之前一轮的私有仓库（未公开），`<REDACTED>` 为删去的设备序列号。
-- 「上位机」指与臂网线直连、运行 ROS2 的主控电脑；「执行方 / 审查方 / 交叉评审方」是项目内部的分工角色（出数据 / 复算定论 / 交叉复审），实机操作均由 Thomas 执行。
-- 文中提到的 `arm_onboard/as_deployed/`（臂上源码备份）、`docs/archive/`、`docs/ASSETS.md`、说明书 PDF、内部草案 §00 / §11 等未公开，链接会失效，这是有意的。
-
-## 5. 离线跑自检
-
-`fsbus_selftest.py` 用模拟串口回放各测试脚本的正常与故障路径，不需要连接机械臂：
+离线自检（不需要连接机械臂，只依赖 Python 3 标准库，脚本自带假的 `serial` 模块）：
 
 ```bash
 python3 tests/scripts/fsbus_selftest.py < /dev/null
 ```
 
-- 只依赖 Python 3 标准库（脚本会在临时目录里放一个假的 `serial` 模块，不需要安装 pyserial）。
-- 在本仓库内实测（2026-11-04，macOS，Python 3）：115 项 `[PASS]`、0 项 `[FAIL]`，最后一行 `结果：全部通过`，耗时约 8 分钟（多数时间花在模拟真实时序的等待上）。
-- 依赖的回放数据 `tests/runs/2026-11-03-TC-009/v2/tc009_samples_20231122_051531.csv` 已收录。
+预期 115 项 `[PASS]`、0 项 `[FAIL]`，最后一行 `结果：全部通过`；多数时间花在模拟真实时序的等待上，约 8 分钟。
 
-**安全提示**：`tests/scripts/` 里除 `fsbus_selftest.py` 和 `q3_ripple_check.py` 外的脚本会驱动真实舵机运动。在自己的设备上运行前，请先读对应用例（`tests/cases/`）的前置条件与中止条件，并确认物理急停在手边。本仓库不对实机使用后果负责（见 LICENSE）。
+**安全提示**：`tests/scripts/` 里除 `fsbus_selftest.py`、`q3_ripple_check.py`、`stream_ack_check.py`、`bus_loss_watch.py` 外的脚本会驱动真实舵机或机械臂运动。在自己的设备上运行前，先读对应用例（`tests/cases/`）或脚本开头说明的前置条件与中止条件，并确认物理急停在手边。
 
-## 6. 第三方资料（不随仓库发布）
+## 8. 第三方资料（不随仓库发布）
 
 以下资料版权属于厂家，本仓库不收录，请从官方渠道获取：
 
@@ -96,8 +200,11 @@ python3 tests/scripts/fsbus_selftest.py < /dev/null
 | FashionStar 舵机说明书、通信协议、SDK | 官方文档站 https://fashionstar.com.cn/wiki/ （协议页 https://fashionstar.com.cn/wiki/protocols/servo/uart-rs485/ ，RX18-U100H-M 型号页 https://fashionstar.com.cn/wiki/uart-servo/rx18-u100h-m/ ）；海外站 https://fashionrobo.com/ |
 | 舵机固件升级工具 | 向 FashionStar 厂家索取（见 ADR-004） |
 | Unitree D1 机械臂文档 | https://support.unitree.com/home/en/developer/D1Arm_services |
-| 臂载控制器源码与二进制（marm_code 等） | 随机械臂出厂，由宇树提供 |
+| 臂载控制器原厂源码与二进制（marm_code 等） | 随机械臂出厂，由宇树提供 |
 
-## 7. 许可证
+## 9. 许可证
 
-本仓库自写内容（文档、脚本、数据）以 [MIT License](LICENSE) 发布。第三方名称与商标归各自所有者。
+- 本仓库自写内容（控制器、脚本、文档、数据）以 [MIT License](LICENSE) 发布。
+- `sdk/`：运动学、轨迹规划与接口设计移植自 d1arm_sdk（经作者授权，随本项目以 MIT 发布），版权与署名见 [`sdk/LICENSE`](sdk/LICENSE)。
+- `sdk/arm_model/d1_description/`：D1 机械臂 URDF 与网格描述包，按其 `package.xml` 声明为 BSD 许可，原样保留。
+- 第三方名称与商标归各自所有者。
