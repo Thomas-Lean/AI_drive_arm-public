@@ -1,0 +1,31 @@
+# d1t-arm-ctrl.service — 可选：开机自动停原厂 4 服务并起 d1t_arm_ctrl（默认不装）
+#
+# 安装（臂上；REPO 换成仓库在臂上的绝对路径，eth0 / 192.168.123.233 换成实际网卡与上位机 IP）：
+#   sed -e 's#REPO#/home/ubuntu/d1t#' -e 's#ARM_IFACE#eth0#' -e 's#HOST_IP#192.168.123.233#' \
+#       deploy/d1t-arm-ctrl.service | sudo tee /etc/systemd/system/d1t-arm-ctrl.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now d1t-arm-ctrl
+#   journalctl -u d1t-arm-ctrl -f                # 看日志（版本行、启动完成：IDLE）
+# 卸载并回官方：
+#   sudo systemctl disable --now d1t-arm-ctrl && sudo rm /etc/systemd/system/d1t-arm-ctrl.service
+#   sudo systemctl daemon-reload && bash deploy/arm_restore.sh
+#
+# 原厂 4 服务保持 enabled：开机先起原厂服务，本服务排在其后由 arm_start.sh 停掉它们。
+# 启动自检失败（如 MTURN 多圈超限）连续 3 次后不再重试，按 arm_onboard/controller/README.md §6 人工处理。
+
+[Unit]
+Description=D1-T arm controller d1t_arm_ctrl
+After=network-online.target marm_controller.service marm_communication.service marm_control.service marm_subscripber.service
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/bin/bash REPO/deploy/arm_start.sh ARM_IFACE HOST_IP
+KillSignal=SIGINT
+TimeoutStopSec=40
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

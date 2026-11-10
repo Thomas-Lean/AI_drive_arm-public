@@ -1,0 +1,55 @@
+/*
+ * d1t_arm.idl — ADR-005 冻结的两条 DDS 消息（任务书 §1.2，2026-11-04 冻结 v0.2）。
+ *
+ * 与任务书 §1.2 的对应：uint8→octet、uint16→unsigned short、uint32→unsigned long、
+ * int64→long long（ROS2 rosidl 同款映射，线上格式一致）。字段名与顺序照抄，不改。
+ *
+ * C++ 代码生成（Mac，需 ~/opt/cyclonedds-0.10.2，见 build_toolchain.sh / README.md）：
+ *   idlc -l cxx -o generated d1t_arm.idl
+ * Python 代码生成（pip cyclonedds==0.10.2）：
+ *   见 README.md「Python 类型生成」
+ *
+ * 话题：rt/d1t/arm_cmd（ArmCmd_）、rt/d1t/arm_state（ArmState_），domain 0。
+ * QoS【暂定，T3/T4 实测再定】：BEST_EFFORT + KEEP_LAST depth 1 + VOLATILE。
+ */
+module d1t_interfaces { module msg { module dds_ {
+
+  // mode 取值
+  //  0 STREAM   q[] 为目标，本周期下发（第一版每周期一个点，ADR-006）
+  //  1 HOLD     0x18 mode 0x11，全轴原地保持锁力（也可作心跳）
+  //  2 RELEASE  0x18 mode 0x10，仅 axis_mask 中的轴；axis_mask=0 拒收
+  //  3 DAMP     0x18 mode 0x12，仅 axis_mask 中的轴；axis_mask=0 拒收
+  //  4 ESTOP    软急停，锁存；只能被 RESET 清除
+  //  5 RESET    清除锁存的 ESTOP / 故障；清除后进入 HOLD
+  struct ArmCmd_ {
+    unsigned long seq;            // uint32：上位机递增
+    long long      stamp_ns;      // int64：上位机发出时刻（CLOCK_REALTIME，ns）；控制器按它判新旧
+    octet          mode;          // uint8
+    octet          axis_mask;     // uint8：bit i = Ji，只对 RELEASE / DAMP 有效
+    float          q[7];          // 目标角，度；J0–J5 关节角，J6 = 舵机角（开度，29–64.5 区间，F60）
+    unsigned short dt_ms;         // uint16：这一步预期时长；控制器钳到 [周期, 3×周期]，写进 0x08 的 time
+    unsigned short grip_power_mw; // uint16：J6 功率上限；0 = 按舵机保护阈值（F38/F49）；上限钳 6000
+  };
+
+  struct ArmState_ {
+    unsigned long  seq;             // uint32：控制器每周期 +1，每周期必发一帧（即使有轴没回包）
+    long long      stamp_ns;        // int64：本周期 0x19+0x16 请求发出时刻（臂载 CLOCK_REALTIME）
+    unsigned long  sample_span_us;  // uint32：最后一个回包收到 − 请求发出
+    octet          ctrl_state;      // uint8：0 INIT 1 IDLE 2 STREAMING 3 HOLD 4 RELEASED 5 ESTOP 6 FAULT
+    unsigned long  cmd_seq_ack;     // uint32：本周期实际作用到总线上的命令 seq
+    long long      cmd_stamp_ns;    // int64：该命令的 stamp_ns 原样回显
+    long long      cmd_rx_ns;       // int64：该命令被控制器收到的时刻（臂载时钟）——上位机据此带内估算时钟偏差
+    octet          valid_mask;      // uint8：bit i = Ji 本周期收到有效 0x16 回包；无效轴的数值为上一次有效值
+    float          q[7];            // 度（0x16 position，单圈）
+    float          q_target[7];     // 本周期下发的目标（钳制后）——ACT 录制用的「动作」取这一列
+    unsigned short current_ma[7];
+    unsigned short voltage_mv[7];
+    float          temp_c[7];       // 0x16 温度 ADC 按 NTC 公式换算（PROTOCOL_NOTES 附录 A）
+    octet          status[7];       // 0x16 原始状态字节
+    short          turns[7];        // int16：0x16 圈数（多圈检查用，§3.3）
+    unsigned long  fault;           // uint32：锁存故障位，见任务书 §1.4
+    unsigned long  warn;            // uint32：本周期告警位（不锁存），见任务书 §1.4
+    unsigned long  overruns;        // uint32：累计周期超时次数
+  };
+
+}; }; };
