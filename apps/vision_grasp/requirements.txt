@@ -2,3 +2,5 @@ numpy>=1.24,<2
 opencv-python==4.7.0.72
 PyYAML>=6,<7
 cyclonedds==0.10.2
+# 抓取/检测另装: ultralytics(含 torch)。torch 主推 CPU 版;GPU 版可选,
+# RTX 50 系须 torch>=2.7.1+cu128(详见 README「依赖」)

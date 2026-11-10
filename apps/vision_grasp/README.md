@@ -58,7 +58,24 @@ rpy(0, -90°, 0)（即 URDF 两夹爪指 origin 中点，与 `sdk/arm_model/d1t.
 
 ```bash
 pip3 install --user -r apps/vision_grasp/requirements.txt
-pip3 install --user pyrealsense2 ultralytics   # 仅相机/抓取需要
+pip3 install --user pyrealsense2   # 相机，标定/检测/抓取需要
+```
+
+**torch/ultralytics 分两档，主推 CPU 版**（配置默认 `grasp.device: cpu`）：
+
+```bash
+# ① CPU 版（默认，够用；首次推理几十秒/帧属正常）
+pip3 install --user torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip3 install --user ultralytics
+# 国内可改用镜像直链（例：mirrors.aliyun.com/pytorch-wheels/cpu/ 下与
+# 本机 Python/CPU 匹配的 torch-*.whl、torchvision-*.whl）
+
+# ② GPU 版（可选，有 N 卡时把 config/default.yaml 的 grasp.device 改 cuda:0）
+#    注意 RTX 50 系（Blackwell，sm_120）必须 torch ≥ 2.7.1+cu128，
+#    2.6.x 及更早的 cu124/cu126 轮子不含其内核（报 no kernel image available）
+pip3 install --user torch==2.7.1+cu128 torchvision==0.22.1+cu128 \
+  --index-url https://download.pytorch.org/whl/cu128
+pip3 install --user ultralytics
 ```
 
 yoloe 注意：`set_classes` 需要 clip 包 + ~240 MB 文本编码器
