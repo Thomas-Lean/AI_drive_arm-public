@@ -17,19 +17,21 @@ board:                       # --- 标记（ArUco 单标记） ---
   max_reprojection_px: 1.0   # PnP 重投影误差上限（px）
   min_pnp_error_gap_px: 0.15 # IPPE 两解误差间隔下限：近正视时双解难分则拒收
 
-robot:                       # --- 机械臂（d1armd TCP JSON-lines） ---
-  host: "127.0.0.1"          # d1armd 地址（不是串口桥地址）
-  port: 7777
-  request_timeout_s: 5.0     # 单条请求超时
+robot:                       # --- 机械臂（d1t_sdk.D1Arm，DDS 直连 d1t_arm_ctrl） ---
+  host: "dds"                # 占位：上层配置校验要求非空。连接由 CYCLONEDDS_URI
+                             #   决定（source deploy/env.sh sim|real），适配层忽略本项
+  port: 1                    # 占位，同上
+  request_timeout_s: 5.0     # 等一帧 ArmState 的超时
   move_timeout_s: 45.0       # 单次运动到位超时
-  vel_dps: 30.0              # 采集点之间的关节速度（°/s）
+  vel_dps: 30.0              # 采集点之间的关节速度（°/s；控制器逐轴限速 100°/s）
   acc_dps2: 50.0             # 关节加速度（°/s²）
   approach_vel_dps: 20.0     # ready/safe 姿态的低速接近速度（°/s）
-  offline_grace_s: 5.0       # 瞬时舵机掉线容忍窗：运动中总线争用会短暂标离线，
-                             #   超窗才判故障；7/7 掉线立即判故障（真机实测需 5s）
+  offline_grace_s: 5.0       # 瞬时舵机掉线容忍窗：超窗才判故障；7/7 掉线立即判故障。
+                             #   本控制器偶发缺回包沿用上次值、连续 200 ms 才判故障，
+                             #   此判据留作冗余防线
   settle_s: 1.2              # 到位后的稳定窗时长（须覆盖多个遥测周期）
   poll_s: 0.1                # 到位轮询间隔
-  arrival_tolerance_deg: 1.8 # 到位容差（含舵机 1.5° 死区；不代表 FK 精度）
+  arrival_tolerance_deg: 1.8 # 到位容差（含舵机死区；不代表 FK 精度）
   stable_tolerance_deg: 0.3  # 稳定窗内容许波动
   ready_pose_deg: [0.0,-40.0,40.0,0.0,40.0,0.0]   # 预备姿态（低速接近）
   safe_pose_deg: [0.0,-90.0,90.0,0.0,0.0,0.0]     # 安全姿态（收尾/异常退场）

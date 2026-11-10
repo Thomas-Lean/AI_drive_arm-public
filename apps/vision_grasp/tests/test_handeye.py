@@ -1,8 +1,7 @@
-"""No robot/camera access: python -m unittest discover -s calibration -v"""
+"""No robot/camera access: python -m pytest apps/vision_grasp/tests -q"""
 import contextlib
 import copy
 import io
-import socket
 import sys
 from pathlib import Path
 import tempfile
@@ -13,7 +12,12 @@ import cv2
 import numpy as np
 import yaml
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # 标定根目录
+_ROOT = Path(__file__).resolve().parents[1]          # 标定根目录
+sys.path.insert(0, str(_ROOT))
+_SDK = str(_ROOT.parents[1] / 'sdk')                 # 仓库根/sdk（d1t_sdk；同 utils/robot.py 的引导）
+if _SDK not in sys.path:
+    sys.path.insert(0, _SDK)
+from d1t_sdk import D1ArmError
 from utils import core
 import handeye as app
 import grasp_yolo as grasp
@@ -158,28 +162,86 @@ class CalibrationTests(unittest.TestCase):
                 app.finish(dict(T_base_tcp=self.bg[:2],T_camera_target=self.ct[:2]),self.cfg,path,'test')
             self.assertEqual(path.read_bytes(),b'previous calibration')
 
-    def test_rpc_handles_fragmented_lines(self):
-        class Socket:
-            chunks=iter([b'{"ok":',b'true,"state":{"mode":"IDLE"}}\n'])
-            def settimeout(self,_): pass
-            def sendall(self,data): self.sent=data
-            def recv(self,_): return next(self.chunks)
+    def test_rpc_state_maps_d1t_modes(self):
+        class FakeArm:
+            def __init__(self, mode, fault=0):
+                self.mode, self.fault, self.n = mode, fault, 0
+            def state(self, timeout_s=None):
+                self.n += 1
+                return dict(q_deg=[0.0]*6, online=[True]*7, stamp_ms=self.n,
+                            mode=self.mode, fault=self.fault)
             def close(self): pass
-        with patch.object(app_robot.socket,'create_connection',return_value=Socket()):
-            arm=app.RpcArm(self.cfg['robot'])
-            self.assertEqual(arm.call('state')['state']['mode'],'IDLE')
+        def payload(mode, fault=0):
+            arm = app.RpcArm(self.cfg['robot'], arm=FakeArm(mode, fault))
+            return arm.call('state')['state']
+        self.assertEqual(payload('IDLE')['mode'], 'IDLE')
+        self.assertEqual(payload('HOLD')['mode'], 'IDLE')     # 控制器保持=静止
+        self.assertEqual(payload('MOVING')['mode'], 'MOVING')
+        self.assertEqual(payload('STREAMING')['mode'], 'MOVING')
+        s = payload('ESTOP')
+        self.assertEqual((s['mode'], s['err']), ('IDLE', 'estop'))  # d1armd 锁存口径
+        s = payload('FAULT', fault=0x10)
+        self.assertEqual(s['mode'], 'IDLE')
+        self.assertIn('0x10', s['err'])
+        self.assertEqual(payload('INIT')['mode'], 'INIT')     # 透传，state() 会拒收
 
-    def test_rpc_timeout_invalidates_connection(self):
-        class Socket:
-            def settimeout(self,_): pass
-            def sendall(self,data): pass
-            def recv(self,_): raise socket.timeout('timeout')
+    def test_rpc_link_failure_invalidates_connection(self):
+        class DeadArm:
+            def state(self, timeout_s=None):
+                raise D1ArmError('5s 内没收到 ArmState（控制器没起？）')
             def close(self): pass
-        with patch.object(app_robot.socket,'create_connection',return_value=Socket()):
-            arm=app.RpcArm(self.cfg['robot'])
-            with self.assertRaises(app.RobotFault): arm.call('state')
-            self.assertTrue(arm.broken)
-            with self.assertRaisesRegex(app.RobotFault,'unusable'): arm.call('state')
+        arm = app.RpcArm(self.cfg['robot'], arm=DeadArm())
+        with self.assertRaises(app.RobotFault):
+            arm.call('state')
+        self.assertTrue(arm.broken)
+        with self.assertRaisesRegex(app.RobotFault, 'unusable'):
+            arm.call('state')
+
+    def test_rpc_motion_auto_clears_latched_estop(self):
+        class LatchedArm:
+            def __init__(self):
+                self.calls = []
+            def state(self, timeout_s=None):
+                return dict(q_deg=[0.0]*6, online=[True]*7, stamp_ms=1,
+                            mode='ESTOP' if not self.calls else 'HOLD', fault=0)
+            def reset(self):
+                self.calls.append('reset')
+                return {'ok': True}
+            def move_joints(self, q, vel_dps=80.0, acc_dps2=500.0, async_=False):
+                self.calls.append(('move_joints', tuple(q), vel_dps, async_))
+                return {'ok': True}
+            def close(self): pass
+        fake = LatchedArm()
+        app.RpcArm(self.cfg['robot'], arm=fake).call('move_joints', q=[0.0]*6, vel_dps=30.0)
+        self.assertEqual(fake.calls[0], 'reset')          # d1armd：锁存随下一条轨迹自动清
+        self.assertIs(fake.calls[1][3], True)             # 运动一律 async，由 wait_still 收口
+
+    def test_rpc_ik_no_solution_is_retryable(self):
+        class IkArm:
+            def __init__(self):
+                self.n = 0
+            def ik(self, pos, rpy=None, quat=None, seed=None):
+                self.n += 1
+                raise D1ArmError('IK 无解（位置误差 8.5 mm，姿态误差 12.30°）')
+            def close(self): pass
+        fake = IkArm()
+        arm = app.RpcArm(self.cfg['robot'], arm=fake)
+        for _ in range(2):  # plan_grasp 换候选重试依赖：前缀可识别且连接不作废
+            with self.assertRaisesRegex(app.RobotFault, '^ik no solution'):
+                arm.call('ik', pose=dict(pos=[0.5, 0, 0.2], quat=[1, 0, 0, 0]))
+            self.assertFalse(arm.broken)
+        self.assertEqual(fake.n, 2)
+
+    def test_rpc_rejects_teach_commands(self):
+        class IdleArm:
+            def state(self, timeout_s=None):
+                return dict(q_deg=[0.0]*6, online=[True]*7, stamp_ms=1, mode='IDLE', fault=0)
+            def close(self): pass
+        arm = app.RpcArm(self.cfg['robot'], arm=IdleArm())
+        for command in ('damping', 'set_joint'):
+            with self.assertRaisesRegex(app.RobotFault, 'no d1t_sdk counterpart'):
+                arm.call(command, id=0, power=500)
+        self.assertFalse(arm.broken)
 
     def test_offline_grace_window(self):
         arm=object.__new__(app.RpcArm)
