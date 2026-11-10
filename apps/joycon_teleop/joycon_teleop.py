@@ -1,4 +1,10 @@
-"""用单个 Joy-Con 控制 D1 末端的位置、朝向和夹爪开度。按键映射见同目录 README.md。"""
+"""用单个 Joy-Con 控制 D1 末端的位置、朝向和夹爪开度。按键映射见同目录 README.md。
+
+迁移自 d1arm_sdk（gitee gccodespace/d1arm_sdk，joycon 分支 f77d370，原作者 bxdw）：
+驱动臂的调用从 d1armd（TCP 7777 JSON RPC）换成 d1t_sdk.D1Arm（DDS 直连 d1t_arm_ctrl），
+手柄映射与姿态算法不动；接口差异（状态键名、看门狗删除、wait_frame 帧同步节拍、
+流式中 J6 夹爪守卫）见同目录 README.md 接口对照表。
+"""
 import argparse
 from dataclasses import dataclass
 import math
@@ -8,9 +14,23 @@ import time
 
 import numpy as np
 
-# 从仓库根目录导入已有的 d1armd 客户端，复用其顺序请求和超时处理。
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from calibration.utils.robot import RobotFault, RpcArm
+# d1t_sdk 在仓库 sdk/ 下（部署时由 deploy/env.sh 设 PYTHONPATH），这里自行补路径。
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'sdk'))
+from d1t_sdk import D1Arm, D1ArmError
+from d1t_sdk._common import CONTROL_HZ
+from d1t_sdk._joint_model import gripper_mm_to_deg, urdf_limits
+
+
+class RobotFault(RuntimeError):
+    """遥操作会话判定臂侧状态异常（原 calibration.utils.robot.RobotFault 的本地等价物）。"""
+
+
+# 夹爪守卫（README 接口表·gripper 行）：流式中 J6 目标角的到位 / 停滞 / 硬超时判据。
+GRIP_ARRIVE_MM = 1.5    # 实测开度与目标差 ≤ 此值即到位
+GRIP_PROBE_MM = 0.5     # 实测开度变化 ≥ 此值视为仍有进展
+GRIP_STALL_S = 0.6      # 这么久没有进展判停滞（通常是夹到物体）
+GRIP_SPEED_DPS = 100.0  # 控制器流式 J6 轴限速（arm_model/d1t.json axis_speed_dps[6]）
+GRIP_MARGIN_S = 1.0     # 按行程估的硬超时之外的余量
 
 
 def vector(values, size):
@@ -124,18 +144,31 @@ class Session:
         self.active = False
         self.streaming = False
         self.last_warning = -math.inf
-        self.stamp = None
+        self.seq = None
         self.axes = from_rpy(np.deg2rad(args.axes_deg))
+        # 原脚本硬编码的对称限位，与本项目实测限位（d1t.json）逐轴取较小者
+        # （实际仅 J2 高侧 89° 比原 90° 紧），见 README 接口表·补充核对。
+        model = np.array([min(abs(lo), hi) for lo, hi in urdf_limits()])
+        self.limits = np.minimum(np.array([135., 90., 90., 135., 90., 135.]), model)
+        # 夹爪守卫状态：grip_target_deg 为 None 表示 J6 保持上次命令角。
+        self.grip_target_deg = None
+        self.grip_target_mm = 0.
+        self.grip_progress_mm = 0.
+        self.grip_progress_t = 0.
+        self.grip_deadline = math.inf
 
     def state(self, expected):
-        s = self.arm.call('state')['state']
-        if s['mode'] != expected or s.get('err') or list(s['online']) != [True]*7:
-            raise RobotFault(f"Unexpected feedback: mode={s['mode']} online={s['online']} err={s.get('err')}")
-        stamp = s['stamp_ms']
-        if not math.isfinite(stamp) or stamp <= 0:
-            raise RobotFault('Invalid robot timestamp')
-        if self.stamp != stamp:
-            self.stamp, self.updated = stamp, time.monotonic()
+        if isinstance(expected, str):
+            expected = (expected,)
+        s = self.arm.state()
+        # fault（d1armd 的 err）非 0、舵机离线或状态不符都结束控制；warn 非致命不拦。
+        if s['mode'] not in expected or s.get('fault') or list(s['online']) != [True]*7:
+            raise RobotFault(f"Unexpected feedback: mode={s['mode']} fault={s.get('fault')} online={s['online']}")
+        seq = s.get('seq')
+        if not isinstance(seq, int) or seq < 0:
+            raise RobotFault('Invalid robot feedback sequence')
+        if self.seq != seq:
+            self.seq, self.updated = seq, time.monotonic()
         elif time.monotonic() - self.updated > 0.5:
             raise RobotFault('Robot feedback stalled')
         vector(s['q_deg'], 6)
@@ -143,22 +176,33 @@ class Session:
 
     def engage(self, sample):
         """用实测关节角计算起始 TCP，同时记录本次接管时的手腕朝向。"""
-        state = self.state('IDLE')
+        # 控制器上次 stream_stop 后停在 HOLD，仅首次启动是 IDLE（接口表·state 行）。
+        state = self.state(('IDLE', 'HOLD'))
         self.q = vector(state['q_deg'], 6)
-        if np.any(np.abs(self.q) > [135.,90.,90.,135.,90.,135.]):
+        if np.any(np.abs(self.q) > self.limits):
             raise RobotFault('Measured starting pose outside calibrated D1 limits')
         self.jaws_open = state['gripper_mm'] >= (self.args.open_mm + self.args.close_mm)/2
-        pose = self.arm.call('fk', q=self.q.tolist())['pose']
+        pose = self.arm.fk(self.q.tolist())
         self.pos = vector(pose['pos'], 3)
         self.rot = self.start_rot = unit_quat(pose['quat'])
         self.start_wrist = sample.wrist.copy()
         self.grip = sample.grip_open
+        self.grip_target_deg = None
         if not self.args.dry_run:
-            # 首帧发实测角，接管时原位保持。后续流式指令中断超过 500 ms 时由服务端保持。
-            self.arm.call('watchdog', ms=500)
-            self.arm.call('stream_start')
+            # 首帧发实测角，接管时原位保持。断流后由控制器内置看门狗约 0.3 s 停臂
+            # （原 d1armd 的 watchdog RPC 已删，见接口表）。
+            self.arm.stream_start()
             self.streaming = True
-            self.arm.call('stream_joints', q=self.q.tolist())
+            self.arm.stream_joints(q_deg=self.q.tolist())
+            deadline = time.monotonic() + 2.0
+            while True:
+                s = self.arm.state()
+                if s['mode'] == 'STREAMING':
+                    break
+                if s.get('fault') or time.monotonic() > deadline:
+                    raise RobotFault(f"Controller did not enter STREAMING: "
+                                     f"mode={s['mode']} fault={s.get('fault')}")
+                self.arm.wait_frame()
         self.active = True
         print('Engaged at measured TCP', self.pos.round(4), flush=True)
 
@@ -166,7 +210,41 @@ class Session:
         self.active = False
         if self.streaming:
             self.streaming = False
-            self.arm.call('stream_stop')
+            try:
+                self.arm.stream_stop()
+            except D1ArmError as exc:
+                # 已在退出路径上：控制器故障时 stream_stop 可能超时，不掩盖原始异常。
+                print('stream_stop failed:', exc, flush=True)
+
+    def start_grip(self, state, now=None):
+        """扳机切换：以实测开度起步记进展，按控制器 J6 轴限速估硬超时。"""
+        if now is None:
+            now = time.monotonic()
+        self.grip_target_mm = self.args.open_mm if self.jaws_open else self.args.close_mm
+        self.grip_target_deg = gripper_mm_to_deg(self.grip_target_mm)
+        self.grip_progress_mm = state['gripper_mm']
+        self.grip_progress_t = now
+        travel = abs(self.grip_target_deg - gripper_mm_to_deg(state['gripper_mm']))
+        self.grip_deadline = now + travel / GRIP_SPEED_DPS + GRIP_MARGIN_S
+
+    def grip_j6_target(self, state, now=None):
+        """本帧 J6 目标角（舵机角，度）：无动作 None（保持上次命令角）；动作中发目标角，
+        到位或停滞后冻结在当前实测开度，不让 J6 长时间向堵转方向压（接口表·gripper 行）。"""
+        if self.grip_target_deg is None:
+            return None
+        if now is None:
+            now = time.monotonic()
+        mm = state['gripper_mm']
+        if abs(mm - self.grip_target_mm) <= GRIP_ARRIVE_MM:
+            self.grip_target_deg = None
+            return None
+        if abs(mm - self.grip_progress_mm) >= GRIP_PROBE_MM:
+            self.grip_progress_mm, self.grip_progress_t = mm, now
+        elif now - self.grip_progress_t >= GRIP_STALL_S or now >= self.grip_deadline:
+            print(f'Gripper stalled at {mm:.1f} mm; freezing J6 command', flush=True)
+            self.grip_target_deg = None
+            return gripper_mm_to_deg(mm)
+        return self.grip_target_deg
 
     def propose(self, sample, dt):
         # delta 是相对接管瞬间的手腕转动。用 C·delta·C⁻¹ 将它换算到工具轴系，
@@ -192,16 +270,17 @@ class Session:
             pos = self.pos + scale*step
             quat = toward(self.rot, rot, scale*math.radians(self.args.angular_dps)*dt)
             try:
-                reply = self.arm.call('ik', pose=dict(pos=pos.tolist(), quat=quat.tolist()),
-                                      seed=self.q.tolist())
-            except RobotFault as exc:
-                if str(exc).startswith('ik no solution'):
+                # IK 在上位机本地算（无 RPC）；无解抛 D1ArmError（'IK 无解（…）'）。
+                q = vector(self.arm.ik(pos=pos.tolist(), quat=quat.tolist(),
+                                       seed=self.q.tolist()), 6)
+            except (RobotFault, D1ArmError) as exc:
+                if str(exc).startswith('IK 无解'):
                     continue
                 raise
-            q = vector(reply['q_deg'], 6)
-            limits = np.array([135.,90.,90.,135.,90.,135.])
+            limits = self.limits.copy()
             # 若接管时 J5 已进入预留区，允许向内退回，同时限制 |J5| 继续增大。
-            limits[4] = min(90., max(90.-self.args.j5_margin_deg, abs(self.q[4])))
+            limits[4] = min(self.limits[4], max(self.limits[4]-self.args.j5_margin_deg,
+                                                abs(self.q[4])))
             if np.all(np.abs(q) <= limits) and np.max(np.abs(q-self.q)) <= self.args.joint_dps*dt:
                 return pos, quat, q
         if time.monotonic() - self.last_warning > 1:
@@ -210,21 +289,24 @@ class Session:
         return self.pos, self.rot, self.q
 
     def tick(self, sample, dt, read_again):
-        measured = vector(self.state('STREAMING' if self.streaming else 'IDLE')['q_deg'], 6)
+        state = self.state('STREAMING' if self.streaming else ('IDLE', 'HOLD'))
+        measured = vector(state['q_deg'], 6)
         if self.streaming and np.max(np.abs(measured-self.q)) > 18:
             raise RobotFault('Joint feedback is too far behind the command')
         pos, rot, q = self.propose(sample, dt)
-        # IK 请求期间操作者可能松开使能键，下发关节指令前再读一次手柄。
+        # IK 期间操作者可能松开使能键，下发关节指令前再读一次手柄。
         latest = read_again()
         if not latest.enabled or latest.quit:
             self.release()
             return not latest.quit
         if self.streaming:
-            self.arm.call('stream_joints', q=q.tolist())
+            self.arm.stream_joints(q_deg=q.tolist(), j6_deg=self.grip_j6_target(state))
             if latest.grip_open != self.grip:
-                # 只在扳机状态切换时发一次命令；实际开合方向以上次夹爪状态为准。
+                # 只在扳机状态切换时改目标；实际开合方向以上次夹爪状态为准。
+                # 流式中不另发 gripper()：J6 目标角随 stream_joints 逐帧下发（接口表）。
+                self.grip = latest.grip_open
                 self.jaws_open = not self.jaws_open
-                self.arm.call('gripper', mm=self.args.open_mm if self.jaws_open else self.args.close_mm)
+                self.start_grip(state)
         elif time.monotonic() - getattr(self, 'last_print', -math.inf) >= 0.5:
             print('Preview pos(m)', pos.round(4), 'q(deg)', q.round(1), flush=True)
             self.last_print = time.monotonic()
@@ -240,7 +322,7 @@ def run(handset, arm, args, session_type=Session):
         while True:
             now = time.monotonic()
             # 循环延迟时最多推进一个标称周期，避免补算积压的位移。
-            dt = min(now-last, 1/args.hz)
+            dt = min(now-last, args.period_s)
             last = now
             sample = handset.read()
             if sample.quit:
@@ -254,35 +336,36 @@ def run(handset, arm, args, session_type=Session):
                 released = False
             elif session.active and not session.tick(sample, dt, handset.read):
                 break
-            time.sleep(max(0., 1/args.hz - (time.monotonic()-now)))
+            # 跟控制器帧走（20 Hz），不写 sleep：本机时钟与臂节拍漂移会漏帧或一帧跳两步。
+            arm.wait_frame()
     finally:
         session.release()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--host', default='127.0.0.1')
-    parser.add_argument('--port', type=int, default=7777)
-    parser.add_argument('--side', choices=['left','right'], default='right')
-    parser.add_argument('--dry-run', action='store_true', help='Use only state/FK/IK RPCs')
-    parser.add_argument('--hz', type=float, default=20.)
+    parser.add_argument('--side', choices=['left', 'right'], default='right')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='只读状态 + 本地 FK/IK 预演目标，不发流式')
     parser.add_argument('--speed-mps', type=float, default=0.04)
     parser.add_argument('--angular-dps', type=float, default=20.)
     parser.add_argument('--joint-dps', type=float, default=25.)
     parser.add_argument('--j5-margin-deg', type=float, default=5.)
     parser.add_argument('--open-mm', type=float, default=55.)
     parser.add_argument('--close-mm', type=float, default=10.)
-    parser.add_argument('--axes-deg', type=float, nargs=3, default=[0.,0.,0.],
-                        metavar=('ROLL','PITCH','YAW'), help='Joy-Con local axes to TCP local axes')
+    parser.add_argument('--axes-deg', type=float, nargs=3, default=[0., 0., 0.],
+                        metavar=('ROLL', 'PITCH', 'YAW'),
+                        help='Joy-Con local axes to TCP local axes')
     args = parser.parse_args()
-    if not (1 <= args.port <= 65535 and 5 <= args.hz <= 50 and 0 < args.speed_mps <= 0.15
+    args.period_s = 1.0 / CONTROL_HZ  # 控制器固定 20 Hz（接口表·stream 行）
+    if not (0 < args.speed_mps <= 0.15
             and 0 < args.angular_dps <= 90 and 0 < args.joint_dps <= 100
             and 0 <= args.j5_margin_deg < 90 and 0 <= args.close_mm < args.open_mm <= 65
             and np.isfinite(args.axes_deg).all()):
-        parser.error('Invalid rate, port, speed, axes, margin or gripper range; see README.md')
+        parser.error('Invalid speed, axes, margin or gripper range; see README.md')
     handset = Handset(args.side)
     try:
-        arm = RpcArm(dict(host=args.host, port=args.port, request_timeout_s=0.4))
+        arm = D1Arm()  # DDS 环境由 deploy/env.sh 提供（CYCLONEDDS_URI + ParticipantIndex）
         try:
             print('Release then hold A (left: Right arrow) to control. Y (left: Left arrow) exits.')
             run(handset, arm, args)
