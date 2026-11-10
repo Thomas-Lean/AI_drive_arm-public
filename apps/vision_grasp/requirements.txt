@@ -1,0 +1,4 @@
+numpy>=1.24,<2
+opencv-python==4.7.0.72
+PyYAML>=6,<7
+cyclonedds==0.10.2

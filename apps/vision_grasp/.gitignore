@@ -1,0 +1,10 @@
+# YOLO 权重不进库（30 MB，下载方式见 models/README.md）
+models/*.pt
+# yoloe 文本编码器（~240 MB，按需下载，见 README「依赖」）
+mobileclip2_b.ts
+
+# 标定产出与采集留档（沿用上游约定：产出与配置同目录）
+config/sessions/
+config/*.npz
+config/*.tmp
+config/teach_poses_*.yaml
