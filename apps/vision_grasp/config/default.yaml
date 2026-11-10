@@ -6,16 +6,24 @@
 # 且 max_pose_attempts <= 已填数量。
 # =====================================================================
 
-board:                       # --- 标记（ArUco 单标记） ---
-  type: aruco_single         # 仅支持单 ArUco（棋盘/ChArUco 不适用）
-  dictionary: DICT_4X4_50    # ArUco 字典
-  marker_id: 0               # 使用的标记 ID
-  marker_length_m: 0.100     # 黑框外沿实测边长（不含白边！打印会缩放，务必实测）
+board:                       # --- 标记板（单 ArUco，或 ChArUco 棋盘做对比实验） ---
+  kind: aruco                # aruco（默认，单标记）| charuco（棋盘；产出文件名自动加
+                             #   _charuco 后缀，与单 ArUco 结果互不覆盖）
+  type: aruco_single
+  dictionary: DICT_4X4_50    # 两种板共用的 ArUco 字典
+  marker_id: 0               # 单 ArUco 用的标记 ID（charuco 忽略）
+  marker_length_m: 0.100     # 单 ArUco：黑框外沿实测边长（不含白边！打印会缩放，务必实测）；
+                             #   charuco：marker 边长 —— 切 kind 时同一键要跟着改！
   border_bits: 1             # 标记边框位宽
-  min_side_px: 60            # 图像中标记最小边长，过小拒绝（角点精度不足）
-  edge_margin_px: 10         # 标记距图像边缘的最小余量
-  max_reprojection_px: 1.0   # PnP 重投影误差上限（px）
-  min_pnp_error_gap_px: 0.15 # IPPE 两解误差间隔下限：近正视时双解难分则拒收
+  min_side_px: 60            # 单 ArUco：图中标记最小边长，过小拒绝
+  edge_margin_px: 10         # 单 ArUco：标记距图像边缘的最小余量
+  max_reprojection_px: 1.0   # 两种板共用的 PnP 重投影误差上限（px）
+  min_pnp_error_gap_px: 0.15 # 单 ArUco：IPPE 两解误差间隔下限（charuco 多角点天然消歧，不用）
+  # --- ChArUco（kind: charuco 时生效；下面是手头板子的标称值，
+  #     开测前用尺实测格边与 marker 边，按实测值改） ---
+  squares_x: 5               # 横向格数
+  squares_y: 5               # 纵向格数
+  square_length_m: 0.030     # 格边长（m）；marker_length_m 用上面同一键，charuco 时填 0.022
 
 robot:                       # --- 机械臂（d1t_sdk.D1Arm，DDS 直连 d1t_arm_ctrl） ---
   host: "dds"                # 占位：上层配置校验要求非空。连接由 CYCLONEDDS_URI

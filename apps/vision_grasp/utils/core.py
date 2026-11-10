@@ -155,12 +155,23 @@ class MarkerDetector:
         params = cv2.aruco.DetectorParameters()
         params.markerBorderBits = cfg['border_bits']
         params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        if cfg.get('kind', 'aruco') == 'charuco':
+            # ChArUco 棋盘:角点网格比单标记多得多,位姿由 marker 角点求
+            # (OpenCV 4.7 的 board.matchImagePoints 只认 marker 角点/ID,
+            #  喂 charuco 角点会返回错配对——实测确认,勿改)。
+            self.board = cv2.aruco.CharucoBoard(
+                (int(cfg['squares_x']), int(cfg['squares_y'])),
+                float(cfg['square_length_m']), float(cfg['marker_length_m']), dictionary)
+            self.detector = cv2.aruco.CharucoDetector(self.board)
+            return
         self.detector = cv2.aruco.ArucoDetector(dictionary, params)
         h = cfg['marker_length_m']/2
         # OpenCV IPPE_SQUARE order: top-left, top-right, bottom-right, bottom-left.
         self.points = np.array([[-h,h,0], [h,h,0], [h,-h,0], [-h,-h,0]], np.float64)
 
     def detect(self, image, k, dist):
+        if getattr(self, 'board', None) is not None:
+            return self._detect_charuco(image, k, dist)
         corners, ids, _ = self.detector.detectMarkers(image)
         if ids is None or np.count_nonzero(ids == self.cfg['marker_id']) != 1:
             raise ValueError('Configured marker missing or duplicated')
@@ -190,3 +201,28 @@ class MarkerDetector:
         if len(candidates)>1 and candidates[1][0]-candidates[0][0] < self.cfg['min_pnp_error_gap_px']:
             raise ValueError('Ambiguous planar PnP; use a more oblique view')
         return candidates[0][1], candidates[0][0], uv
+
+    def _detect_charuco(self, image, k, dist):
+        """ChArUco 分支:位姿/重投影与单 ArUco 同一口径(板系→相机系 + px),
+        近正视双解拒收不需要(多角点天然消歧)。可用角点少于 6 个判帧无效。"""
+        charuco_corners, charuco_ids, marker_corners, marker_ids = self.detector.detectBoard(image)
+        n_corners = 0 if charuco_corners is None else len(charuco_corners)
+        if marker_ids is None or len(marker_ids) == 0 or n_corners < 6:
+            raise ValueError(f'ChArUco board not visible enough ({n_corners} corners)')
+        if self.board.checkCharucoCornersCollinear(charuco_ids):
+            raise ValueError('ChArUco corners are collinear')
+        obj, pts = self.board.matchImagePoints(marker_corners, marker_ids)
+        obj = np.asarray(obj, np.float64).reshape(-1, 3)
+        pts = np.asarray(pts, np.float64).reshape(-1, 2)
+        if len(obj) < 8 or not (np.isfinite(obj).all() and np.isfinite(pts).all()):
+            raise ValueError('ChArUco correspondences unusable')
+        ok, rv, tv = cv2.solvePnP(obj, pts, k, dist)
+        if not ok or not np.isfinite(rv).all() or not np.isfinite(tv).all() or tv[2, 0] <= 0:
+            raise ValueError('ChArUco PnP failed')
+        projected = cv2.projectPoints(obj, rv, tv, k, dist)[0].reshape(-1, 2)
+        error = float(np.sqrt(np.mean(np.sum((projected-pts)**2, axis=1))))
+        if not np.isfinite(error) or error > self.cfg['max_reprojection_px']:
+            raise ValueError('PnP reprojection error too large')
+        r = cv2.Rodrigues(rv)[0]
+        uv = np.asarray(charuco_corners, np.float64).reshape(-1, 2)
+        return transform(r, tv), error, uv

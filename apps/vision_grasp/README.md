@@ -48,6 +48,11 @@ apps/vision_grasp/
 rpy(0, -90°, 0)（即 URDF 两夹爪指 origin 中点，与 `sdk/arm_model/d1t.json`
 一致），不是裸法兰；换装工具或改动 TCP 定义后必须重新标定。
 
+标定板两种可选（`board.kind`）：**单 ArUco**（默认）与 **ChArUco 棋盘**（角点
+多、近正视不歧义，对比实验用）。ChArUco 时产出文件名自动带 `_charuco` 后缀，
+与单 ArUco 结果互不覆盖；`yolo_detect`/`grasp_yolo` 读哪份由当时的 `board.kind`
+决定。同臂同点位两轮对比的流程见实机验收清单 §3b。
+
 ## 依赖
 
 - Python 3.10–3.11（`opencv-python==4.7.0.72` 无更高版本 wheel）

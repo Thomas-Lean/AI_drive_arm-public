@@ -41,6 +41,19 @@ def as_pose(t):
     return dict(pos=t[:3,3].tolist(), quat=[float(np.cos(a/2)), *xyz.tolist()])
 
 
+def charuco_scene(k, rvec, tvec, size=(640, 480)):
+    """5x5 ChArUco 板按已知位姿渲染成灰度图(单应变换,无畸变)。"""
+    board = cv2.aruco.CharucoBoard((5, 5), 0.030, 0.022,
+                                   cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
+    tile = board.generateImage((500, 500), 0, 1)
+    side = 5 * 0.030
+    quad = np.array([[0, 0, 0], [side, 0, 0], [side, side, 0], [0, side, 0]], np.float64)
+    proj, _ = cv2.projectPoints(quad, np.asarray(rvec), np.asarray(tvec), k, np.zeros(5))
+    homography, _ = cv2.findHomography(
+        np.array([[0, 0], [500, 0], [500, 500], [0, 500]], np.float64), proj.reshape(-1, 2))
+    return cv2.warpPerspective(tile, homography, size, flags=cv2.INTER_CUBIC, borderValue=255)
+
+
 class CalibrationTests(unittest.TestCase):
     def setUp(self):
         self.cfg = app.load_config(Path(__file__).resolve().parents[1] / 'config' / 'default.yaml', motion=False)
@@ -123,6 +136,56 @@ class CalibrationTests(unittest.TestCase):
                     app.load_config(path)
             path.write_text(yaml.safe_dump(cfg),encoding='utf-8')
             self.assertEqual(len(app.load_config(path)['robot']['poses_deg']),50)
+
+    def test_charuco_detector_recovers_known_pose(self):
+        b = copy.deepcopy(self.cfg['board'])
+        b.update(kind='charuco', squares_x=5, squares_y=5,
+                 square_length_m=0.030, marker_length_m=0.022)
+        k = np.array([[600., 0, 320], [0, 600., 240], [0, 0, 1.]])
+        rvec = np.array([0.15, -0.10, 0.05])
+        tvec = np.array([0.02, -0.01, 0.35])
+        image = charuco_scene(k, rvec, tvec)
+        t, err, uv = core.MarkerDetector(b).detect(image, k, np.zeros(5))
+        self.assertLess(err, 1.0)                              # 重投影上限同单 ArUco
+        # 位置 ≤3mm:合成图经单应重采样,角点亚像素地板 ~2.7mm@0.35m,再紧会误报
+        self.assertLess(float(np.linalg.norm(t[:3, 3] - tvec)), 0.003)
+        rot_err = core.angle_deg(cv2.Rodrigues(rvec)[0].T @ t[:3, :3])
+        self.assertLess(rot_err, 0.5)                          # 姿态 ≤0.5°
+        self.assertGreaterEqual(len(uv), 6)                    # 返回的角点用于预览
+        occluded = image.copy()
+        occluded[:, :500] = 255                                # 只剩右侧一条 → 角点不足
+        with self.assertRaisesRegex(ValueError, 'not visible enough'):
+            core.MarkerDetector(b).detect(occluded, k, np.zeros(5))
+
+    def test_config_board_kind_charuco_rules_and_filename(self):
+        base = copy.deepcopy(self.cfg)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'default.yaml'
+            def load(board):
+                cfg = copy.deepcopy(base)
+                cfg['board'] = board
+                path.write_text(yaml.safe_dump(cfg), encoding='utf-8')
+                return app.load_config(path, motion=False)
+            bad = copy.deepcopy(base['board']); bad['kind'] = 'april'
+            with self.assertRaisesRegex(ValueError, 'board.kind'):
+                load(bad)
+            incomplete = copy.deepcopy(base['board'])
+            incomplete.update(kind='charuco', square_length_m=0.030, marker_length_m=0.022)
+            incomplete.pop('squares_x')                        # default.yaml 自带,显式删掉再测
+            with self.assertRaisesRegex(ValueError, 'squares_x'):
+                load(incomplete)
+            bad_ratio = copy.deepcopy(base['board'])
+            bad_ratio.update(kind='charuco', squares_x=5, squares_y=5,
+                             square_length_m=0.030, marker_length_m=0.030)
+            with self.assertRaisesRegex(ValueError, 'marker_length_m'):
+                load(bad_ratio)
+            good = copy.deepcopy(base['board'])
+            good.update(kind='charuco', squares_x=5, squares_y=5,
+                        square_length_m=0.030, marker_length_m=0.022, marker_id=9999)
+            cfg = load(good)                                   # marker_id 对 charuco 无意义,不校验
+            self.assertEqual(cfg['output']['filename'], 'hand_eye_charuco.npz')
+            self.assertEqual(load(copy.deepcopy(base['board']))['output']['filename'],
+                             'hand_eye.npz')                   # 默认 aruco 不加后缀
 
     def test_detector_generated_marker(self):
         b = copy.deepcopy(self.cfg['board'])

@@ -41,11 +41,24 @@ def load_config(path, motion=True):
     b, r, cam, c, q = [cfg[k] for k in ['board','robot','camera','collection','quality']]
     if b.get('type') != 'aruco_single':
         raise ValueError('This implementation supports board.type: aruco_single')
+    if b.get('kind', 'aruco') not in ('aruco', 'charuco'):
+        raise ValueError('board.kind must be aruco or charuco')
     if not isinstance(b.get('dictionary'), str) or not b['dictionary'].startswith('DICT_'):
         raise ValueError('Invalid ArUco dictionary')
     dictionary = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, b['dictionary']))
-    if type(b.get('marker_id')) is not int or not 0 <= b['marker_id'] < len(dictionary.bytesList):
-        raise ValueError('Invalid marker_id')
+    if b.get('kind', 'aruco') == 'aruco':
+        if type(b.get('marker_id')) is not int or not 0 <= b['marker_id'] < len(dictionary.bytesList):
+            raise ValueError('Invalid marker_id')
+    else:  # charuco:marker_id 不用;校验棋盘几何
+        for key in ('squares_x', 'squares_y'):
+            if type(b.get(key)) is not int or b[key] < 3:
+                raise ValueError(f'board.{key} must be an integer >= 3')
+        square = b.get('square_length_m')
+        if (isinstance(square, bool) or not isinstance(square, (int, float))
+                or not np.isfinite(square) or square <= 0):
+            raise ValueError('board.square_length_m must be a finite positive number')
+        if not 0 < b['marker_length_m'] < square:
+            raise ValueError('ChArUco requires 0 < marker_length_m < square_length_m')
     positive = {'board': ['marker_length_m','min_side_px','max_reprojection_px'],
                 'robot': ['port','request_timeout_s','move_timeout_s','vel_dps','acc_dps2',
                           'approach_vel_dps','offline_grace_s',
@@ -99,6 +112,9 @@ def load_config(path, motion=True):
             raise ValueError('output paths must be simple names within the config directory')
     if not cfg['output']['filename'].endswith('.npz'):
         raise ValueError('output.filename must end in .npz')
+    if b.get('kind', 'aruco') == 'charuco' and 'charuco' not in cfg['output']['filename']:
+        # 板型入文件名:两种板各存各的,互不覆盖;yolo_detect/grasp_yolo 读同一配置键,自动跟随
+        cfg['output']['filename'] = cfg['output']['filename'][:-len('.npz')] + '_charuco.npz'
     if motion:
         poses = r.get('poses_deg')
         if not isinstance(poses, list) or not poses:
