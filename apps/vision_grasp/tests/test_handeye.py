@@ -197,24 +197,72 @@ class CalibrationTests(unittest.TestCase):
         with self.assertRaisesRegex(app.RobotFault, 'unusable'):
             arm.call('state')
 
-    def test_rpc_motion_auto_clears_latched_estop(self):
+    def test_rpc_self_estop_auto_clears_before_motion(self):
         class LatchedArm:
             def __init__(self):
-                self.calls = []
+                self.calls, self.mode = [], 'HOLD'
             def state(self, timeout_s=None):
                 return dict(q_deg=[0.0]*6, online=[True]*7, stamp_ms=1,
-                            mode='ESTOP' if not self.calls else 'HOLD', fault=0)
+                            mode=self.mode, fault=0)
+            def estop(self):
+                self.calls.append('estop'); self.mode = 'ESTOP'
+                return {'ok': True}
             def reset(self):
-                self.calls.append('reset')
+                self.calls.append('reset'); self.mode = 'HOLD'
                 return {'ok': True}
             def move_joints(self, q, vel_dps=80.0, acc_dps2=500.0, async_=False):
                 self.calls.append(('move_joints', tuple(q), vel_dps, async_))
                 return {'ok': True}
             def close(self): pass
         fake = LatchedArm()
-        app.RpcArm(self.cfg['robot'], arm=fake).call('move_joints', q=[0.0]*6, vel_dps=30.0)
-        self.assertEqual(fake.calls[0], 'reset')          # d1armd：锁存随下一条轨迹自动清
-        self.assertIs(fake.calls[1][3], True)             # 运动一律 async，由 wait_still 收口
+        arm = app.RpcArm(self.cfg['robot'], arm=fake)
+        arm.call('estop')                                   # 本进程发的急停
+        arm.call('move_joints', q=[0.0]*6, vel_dps=30.0)
+        self.assertEqual(fake.calls[:3], ['estop', 'reset', ('move_joints', (0.0,)*6, 30.0, True)])
+        # 复位后标志作废：未经本进程 estop（如外部 CLI）的锁存不许自动清
+        fake.mode = 'ESTOP'
+        with self.assertRaisesRegex(app.RobotFault, 'latched ESTOP'):
+            arm.call('move_joints', q=[0.0]*6)
+        self.assertEqual(fake.calls.count('reset'), 1)
+
+    def test_rpc_external_estop_is_not_auto_cleared(self):
+        class ExternalEstopArm:  # 锁存来自别处（CLI/其他进程），本进程没发过 estop
+            def __init__(self):
+                self.resets = 0
+            def state(self, timeout_s=None):
+                return dict(q_deg=[0.0]*6, online=[True]*7, stamp_ms=1,
+                            mode='ESTOP', fault=0x02)
+            def reset(self):
+                self.resets += 1
+                return {'ok': True}
+            def move_joints(self, *a, **k):
+                pass
+            def close(self): pass
+        fake = ExternalEstopArm()
+        arm = app.RpcArm(self.cfg['robot'], arm=fake)
+        with self.assertRaisesRegex(app.RobotFault, 'latched ESTOP.*d1t_sdk reset'):
+            arm.call('move_joints', q=[0.0]*6)
+        self.assertEqual(fake.resets, 0)   # 绝不悄悄复位
+        self.assertFalse(arm.broken)       # 拒绝运动 ≠ 连接作废，可重试/可查状态
+
+    def test_rpc_fault_is_not_auto_cleared(self):
+        class FaultArm:  # 舵机保护 0x08 + 通信丢失 0x10：读了故障位才能决定复位
+            def __init__(self):
+                self.resets = 0
+            def state(self, timeout_s=None):
+                return dict(q_deg=[0.0]*6, online=[True]*7, stamp_ms=1,
+                            mode='FAULT', fault=0x18)
+            def reset(self):
+                self.resets += 1
+                return {'ok': True}
+            def move_joints(self, *a, **k):
+                pass
+            def close(self): pass
+        fake = FaultArm()
+        arm = app.RpcArm(self.cfg['robot'], arm=fake)
+        with self.assertRaisesRegex(app.RobotFault, 'latched FAULT.*servo-prot.*comm-loss'):
+            arm.call('move_joints', q=[0.0]*6)
+        self.assertEqual(fake.resets, 0)
 
     def test_rpc_ik_no_solution_is_retryable(self):
         class IkArm:

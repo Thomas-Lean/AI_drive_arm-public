@@ -5,9 +5,11 @@
 - 所有运动请求一律 async，由 wait_still 轮询确认到位（静止 + 到位容差 + 稳定窗）。
 - state 键沿用 d1armd 口径：q_deg（6 URDF 角）/online（7）/stamp_ms/mode/err/degraded；
   控制器 HOLD 视为静止（'IDLE'），轨迹/流式执行中为 'MOVING'。
-- estop 锁存语义复刻：d1t_sdk 的 ESTOP 要显式 reset() 才能再动，d1armd 是下一条
-  轨迹自动清——适配层在每条运动命令前自动 reset()，上层恢复路径零改动；
-  锁存期间 state() 照常报告 err='estop'（与 d1armd 一致）。
+- estop 锁存语义：本进程经 call('estop') 发出的急停，锁存在 state() 里照常可见
+  （err='estop'），并在下一条运动命令前自动 reset() 清掉（d1armd「下一条轨迹
+  自动清」的等价复刻，上层恢复路径零改动）。**外部** estop 与任何 FAULT 都不
+  自动清：运动命令直接抛 RobotFault（消息带 mode 与 fault 位），确认安全后
+  手动 `python3 -m d1t_sdk reset`——绝不悄悄放行别人按下的急停或未读的故障。
 - 链路彻底断开时本进程未必还能补发急停（DDS 同进程重复建 participant 会撞端口），
   兜底是臂载控制器看门狗：停止发送约 0.3 s 后自行停臂。
 - 'damping'/'set_joint'（拖动示教）无对应接口：d1t_sdk 的 free_all 是整臂失力
@@ -39,6 +41,14 @@ def log(message):
 _STILL_MODES = ('IDLE', 'HOLD')
 _MOVING_MODES = ('MOVING', 'STREAMING')
 _LATCHED_MODES = ('ESTOP', 'FAULT')  # d1armd 里表现为 mode='IDLE' + err 锁存串
+# fault 位名（与臂载控制器/ sdk README 的位定义一致，见 d1t_sdk._common）
+_FAULT_BITS = {0x01: 'watchdog', 0x02: 'estop', 0x04: 'multi-turn',
+               0x08: 'servo-prot', 0x10: 'comm-loss', 0x20: 'j6-thermal'}
+
+
+def _fault_names(bits):
+    names = [name for bit, name in _FAULT_BITS.items() if bits & bit]
+    return f"0x{bits:02x}" + (f" ({'|'.join(names)})" if names else '')
 
 
 class RpcArm:
@@ -50,6 +60,7 @@ class RpcArm:
         self.last_stamp = None
         self.offline_since = None
         self.broken = False
+        self.self_estop = False  # 本进程发过 estop 且尚未复位（唯一允许自动清的锁存）
         if arm is None:
             try:
                 arm = D1Arm()
@@ -90,15 +101,26 @@ class RpcArm:
         return out
 
     def _ensure_movable(self):
-        """d1armd 语义：estop 锁存到下一条轨迹自动清。D1Arm 要显式 reset()，
-        适配层在每条运动命令前代劳。FAULT 一并尝试恢复（复位不了就抛错）。"""
+        """运动前的锁存检查。只自动清**本进程**发出的 estop（d1armd「下一条轨迹
+        自动清」的等价复刻）；外部 estop 与任何 FAULT 一律拒绝并抛错——别人按的
+        急停、没读过的故障位，绝不悄悄放行。确认安全后手动
+        `python3 -m d1t_sdk reset`。"""
         s = self._read_arm_state()
-        if s['mode'] in _LATCHED_MODES:
-            log(f'clearing latched {s["mode"].lower()} via reset() before motion')
+        mode = s['mode']
+        if mode == 'ESTOP' and self.self_estop:
+            log('clearing self-issued estop via reset() before motion')
             try:
                 self.arm.reset()
             except D1ArmError as exc:
-                raise RobotFault(f'reset after latched {s["mode"]} failed: {exc}') from exc
+                raise RobotFault(f'reset after self-issued estop failed: {exc}') from exc
+            self.self_estop = False
+            return
+        if mode in _LATCHED_MODES:
+            bits = _fault_names(int(s.get('fault', 0)))
+            raise RobotFault(
+                f'motion refused: latched {mode} (fault {bits}); confirm it is safe, '
+                'then clear it manually with: python3 -m d1t_sdk reset')
+        self.self_estop = False  # 运动得以执行说明锁存已不在，标志随之作废
 
     # ---------- 上层接口（签名与 d1armd 时代一致） ----------
 
@@ -147,6 +169,7 @@ class RpcArm:
             return {'ok': True}
         if command == 'estop':
             self.arm.estop()
+            self.self_estop = True  # 自己发的急停才允许下一条运动前自动清
             return {'ok': True}
         if command in ('damping', 'set_joint'):
             raise RobotFault(
