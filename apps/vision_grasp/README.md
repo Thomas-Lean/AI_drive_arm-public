@@ -85,3 +85,58 @@ yoloe 注意：`set_classes` 需要 clip 包 + ~240 MB 文本编码器
 | `call('gripper')` | 3 | `D1Arm.gripper(mm)` | mm 语义同为金属指间距；本项目可达域 4–70 mm（实测标定表）⊇ 原 0–65 mm；J6 限速 ≤20°/s 相同 |
 | `call('estop')` | 6 | `D1Arm.estop()` | **差异已处理**：本项目急停锁存至 `reset()`，原为下一条轨迹自动清 → 适配层在每条运动命令前自动 `reset()`，上层恢复路径零改动 |
 | `call('damping')` / `call('set_joint')` | 3 | **无对应** | 仅 `scripts/teach_poses.py` 拖动示教用；本项目 `free_all` 是整臂失力（臂会掉），不许顶替 → 适配层显式拒绝，teach_poses 标记不支持（见「已知限制」），点位改为手填关节角 |
+
+## 怎么跑
+
+### 仿真验证（无臂，先做这个）
+
+```bash
+bash deploy/setup_host.sh            # 依赖（已装自动跳过）
+bash deploy/arm_install.sh           # 编译控制器 + ctest
+source deploy/env.sh sim             # 设 CYCLONEDDS_URI / PYTHONPATH
+bash deploy/sim_start.sh             # 终端 1：--sim 控制器（lo，前台）
+# 另开终端 2（同样 source deploy/env.sh sim）：
+python3 -m pytest apps/vision_grasp/tests -q        # 39 项无硬件测试
+python3 apps/vision_grasp/scripts/fk_compare.py     # FK 与 d1arm_sdk 金标比对（离线）
+python3 apps/vision_grasp/scripts/dryrun.py         # 32 个采集点位 dry-run（对 --sim）
+```
+
+系统 OpenCV 不是 4.7.0.72 时（缺 `cv2.aruco.generateImageMarker` 等），建隔离环境：
+`python3 -m venv --system-site-packages ~/vg-venv && ~/vg-venv/bin/pip install
+-r apps/vision_grasp/requirements.txt pytest`，之后命令里的 `python3` 换
+`~/vg-venv/bin/python`。
+
+仿真全过的判据：pytest 全绿；fk_compare 4 项 PASS；dryrun 末尾
+`VERDICT: pose list passes kinematic checks`。
+
+### 实机（标定 + 抓取）
+
+按 [`实机验收清单.md`](实机验收清单.md) 顺序：取景（live_view）→ 点位彩排
+（pose_test）→ 手眼标定（handeye.py）→ 检查看坐标（yolo_detect.py）→
+YOLO 抓取（grasp_yolo.py，先 `--dry-run`）。每步一条命令、一条通过判据、
+中止手段都在清单里。
+
+## 已知限制
+
+| # | 限制 | 说明 |
+|---|---|---|
+| 1 | 拖动示教不支持 | 原工程的 `damping`/`set_joint` 在 d1t_sdk 无对应（`free_all` 是整臂失力、臂会掉，不许顶替）；`scripts/teach_poses.py` 运行会立即报不支持，采集点位手填关节角（注意 J2 ≤ 89°） |
+| 2 | estop 锁存语义差异 | 本项目急停锁存到 `reset()`（原工程下一条轨迹自动清）。适配层在每条运动命令前自动 reset；但脚本开头先读状态的步骤（如 dryrun 的 `wait_still`）会先抛 `Unexpected robot state: IDLE estop`——跑前 `python3 -m d1t_sdk reset` 清一次 |
+| 3 | FK/IK 绝对精度 ±1 cm 量级 | 零位偏移未精标 + 重力下沉约 1 cm（SDK 不补偿，见仓库主 README 已知限制 #4/#7）。标定与抓取全用实测角与相对变换，不受累积影响，但 `min_base_z_m` 等余量按此留 |
+| 4 | J4≈90° 保持自激 | 手腕水平伸出保持会自激抖动触发 HOLD_FAIL（`reset()` 可恢复）；采集点位与预抓取姿态避开（仓库主 README #5） |
+| 5 | 夹爪 mm 为金属指间距 | 可达域 4–70 mm（实测标定表；垫面间距 = 金属 − 4）；不用原工程 0°↔0 mm 线性公式 |
+| 6 | 对端控制器中途退出 | 实测一次：控制器进程消失时 d1t_sdk 发送线程可能因 cyclonedds `InvalidSample` 报错退出（d1t_sdk 既有行为，不改 SDK）；臂由看门狗约 0.3 s 停住，重启脚本即可 |
+| 7 | 速度上限 100°/s | 控制器逐轴限速；采集 30°/s、接近 20°/s、直线 0.04 m/s，均在限内 |
+| 8 | 权重与文本编码器不入库 | 30 MB 模型与 ~240 MB yoloe 编码器按需下载（见 `models/README.md` 与「依赖」）；yoloe 下 `classes` 白名单不能清空，否则零检测 |
+| 9 | 本期验证范围 | pytest 39 项 + FK 金标比对 + `--sim` dry-run 全过；**实机标定与抓取未做**，按实机验收清单由人工执行 |
+| 10 | `robot.host`/`robot.port` 为占位 | 上层配置校验要求非空；DDS 连接实际由 `source deploy/env.sh` 设置的 `CYCLONEDDS_URI` 决定，适配层忽略这两项 |
+| 11 | 安全位姿 J2 = 89° | 实测限位 J2 ∈ [-97, 89]°，原工程 safe_pose 的 90° 超上界 1°，配置已改 89° |
+
+## 参考与验证
+
+- 上游 [d1arm_sdk](https://gitee.com/gccodespace/d1arm_sdk)（分支 `grasp_back`、
+  提交 `f95f6c9`）：本目录的直接来源，含 31 项无硬件测试与真机整定记录
+  （迁移后为 39 项，新增 4 项适配层语义测试、替换 2 项传输层测试）。
+- 上游参考工程 `reBot-DevArm-Grasp`（采集/抓取流程与几何约定的原始参考）。
+- OpenCV `calibrateHandEye`（PARK/TSAI/HORAUD）；ArUco IPPE_SQUARE + 双解歧义拒收。
+
