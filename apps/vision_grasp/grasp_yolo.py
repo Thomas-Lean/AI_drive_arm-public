@@ -34,6 +34,13 @@ DEFAULTS = dict(conf=0.5, iou=0.45, device='cpu', classes=[],
                 gripper_open_mm=65.0, gripper_close_factor=1.0,
                 gripper_close_min_mm=15.0, min_base_z_m=0.02)
 
+# 闭爪后锁停住角的判据（顶物体保持会堵转发热：实测目标比停住角多闭约 3°
+# 电流即超 300 mA、82 s 内 J6 从 40 ℃ 升到 45 ℃，20 mm 的差更甚）
+GRIP_SETTLE_TIMEOUT_S = 2.0  # 闭爪命令走完后等稳定的超时
+GRIP_STABLE_FRAMES = 3       # 连续稳定帧数（每帧变化 < GRIP_STABLE_MM）
+GRIP_STABLE_MM = 0.2         # 每帧开度变化阈值，≈0.3°（夹爪标定表斜率 0.55–0.92 mm/°）
+GRIP_POLL_S = 0.05           # 轮询间隔（一帧 20 Hz 遥测）
+
 
 def short_edge(rect):
     """Shortest edge vector and length of a 4-point min-area rect."""
@@ -116,12 +123,50 @@ def tcp_rotation(grasp, t_base_camera, open_axis='y'):
 
 
 def close_target_mm(jaw_m, factor, minimum_mm, maximum_mm):
-    """Gripper closing width from the measured grasp dimension: measured x
-    factor, clipped to [minimum, fully open]. factor 1.0 = contact hold on a
-    rigid object; <1.0 squeezes a soft object; the minimum avoids punishing a
-    rigid target when the measurement runs small."""
+    """Closing cap from the measured grasp dimension: measured x factor, clipped
+    to [minimum, fully open]. It only decides how far closing may go — after
+    the jaws stop (on the object) the grip locks at the stopped angle instead
+    (see close_and_lock); the cap is never held against the object."""
     target = float(jaw_m) * 1000.0 * float(factor)
     return float(np.clip(target, minimum_mm, maximum_mm))
+
+
+def close_and_lock(arm, close_mm, g):
+    """Close onto the target, then re-target the stopped angle (no stall hold).
+
+    After the closing move, poll gripper_mm until GRIP_STABLE_FRAMES
+    consecutive frames each change less than GRIP_STABLE_MM (jaws blocked by
+    the object, or fully closed), then re-send that measured opening so the
+    servo holds at the stopped angle instead of pushing against the object.
+    No stabilization within GRIP_SETTLE_TIMEOUT_S, or an opening at/below the
+    minimum (nothing between the jaws), opens the gripper and raises: a
+    stalled grip is never held. Returns the locked opening in mm."""
+    log(f'Closing gripper to {close_mm:.1f}mm (cap only; locks at the stopped angle)')
+    arm.call('gripper', mm=close_mm)
+    readings, stable = [], 0
+    deadline = time.monotonic() + GRIP_SETTLE_TIMEOUT_S
+    while time.monotonic() < deadline:
+        mm = arm.call('state')['state'].get('gripper_mm')
+        if mm is None or not np.isfinite(mm):
+            raise RobotFault('Gripper feedback unavailable while closing')
+        stable = stable + 1 if readings and abs(mm - readings[-1]) < GRIP_STABLE_MM else 0
+        readings.append(mm)
+        if stable >= GRIP_STABLE_FRAMES:
+            break
+        time.sleep(GRIP_POLL_S)
+    else:
+        arm.call('gripper', mm=g['gripper_open_mm'])
+        raise RobotFault(f'Gripper did not settle within {GRIP_SETTLE_TIMEOUT_S:.0f}s; '
+                         'jaws opened, no hold')
+    mm_now = float(readings[-1])
+    if mm_now <= g['gripper_close_min_mm'] + 2.0:
+        arm.call('gripper', mm=g['gripper_open_mm'])
+        raise RobotFault(f'Gripper closed to {mm_now:.1f}mm (<= minimum '
+                         f"{g['gripper_close_min_mm']:.0f}+2mm): nothing held; "
+                         'jaws opened')
+    log(f'Holding at the stopped angle: {mm_now:.1f}mm')
+    arm.call('gripper', mm=mm_now)
+    return mm_now
 
 
 def quat_from_matrix(rotation):
@@ -443,9 +488,7 @@ def main(argv=None):
                 traverse(arm, pos, quat, plan['end_q'], g)
                 for _ in range(int(g['wait_before_grip_s'] * 10)):
                     cv2.waitKey(100)  # Keep the window alive during the settle wait.
-                log(f'Closing gripper to {close_mm:.1f}mm')
-                arm.call('gripper', mm=close_mm)
-                time.sleep(1.0)
+                close_and_lock(arm, close_mm, g)
                 log('Retreating to pregrasp before returning to ready pose')
                 traverse(arm, plan['pre'], quat, plan['pre_q'], g)
                 arm.move(robot['ready_pose_deg'], robot['approach_vel_dps'])

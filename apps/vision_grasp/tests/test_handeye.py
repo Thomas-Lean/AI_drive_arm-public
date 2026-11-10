@@ -767,6 +767,48 @@ class GraspPlanTests(unittest.TestCase):
             grasp.traverse(arm, xyz, quat, q, grasp.DEFAULTS)
         arm.move.assert_not_called()
 
+    def test_close_and_lock_grip_air_and_timeout(self):
+        class GripArm:
+            """state 按 script 出 gripper_mm（有限序列停在末值，或无限 callable）。"""
+            def __init__(self, script):
+                self.script, self.i, self.calls = script, 0, []
+            def call(self, cmd, **kw):
+                self.calls.append((cmd, kw))
+                if cmd == 'state':
+                    mm = (self.script(self.i) if callable(self.script)
+                          else self.script[min(self.i, len(self.script) - 1)])
+                    self.i += 1
+                    return dict(state=dict(q_deg=[0.0]*6, mode='IDLE', online=[True]*7,
+                                           stamp_ms=self.i, gripper_mm=mm))
+                return dict(ok=True)
+            def close(self): pass
+        g = dict(grasp.DEFAULTS)
+        # 夹住：闭向 45mm 被物体挡在 ~65mm → 稳定后锁停住角，不再顶
+        arm = GripArm([65.2, 65.1, 65.15, 65.1])
+        with patch.object(grasp.time, 'sleep'):
+            locked = grasp.close_and_lock(arm, 45.0, g)
+        self.assertAlmostEqual(locked, 65.1, places=6)
+        gripped = [kw.get('mm') for cmd, kw in arm.calls if cmd == 'gripper']
+        self.assertEqual(gripped[0], 45.0)                    # 先按上限闭
+        self.assertAlmostEqual(gripped[1], 65.1, places=6)    # 再锁停住角
+        # 空夹：一路闭到 14.5mm（≤ 15+2）→ 开爪报错，不保持
+        arm = GripArm([30.0, 20.0, 15.0, 14.5, 14.6, 14.5, 14.5])
+        with patch.object(grasp.time, 'sleep'):
+            with self.assertRaisesRegex(grasp.RobotFault, 'nothing held'):
+                grasp.close_and_lock(arm, 15.0, g)
+        gripped = [kw.get('mm') for cmd, kw in arm.calls if cmd == 'gripper']
+        self.assertIn(g['gripper_open_mm'], gripped)          # 开爪了
+        self.assertNotIn(14.5, gripped)                       # 空爪不当保持目标
+        # 超时：一直没稳定 → 开爪报错
+        arm = GripArm(lambda i: 40.0 + 0.5 * i)               # 每帧变化 0.5mm > 阈值
+        ticks = iter([0.0, 1.0, 1.05, 1.1, 1.15, 5.0])        # 越过 2s 截止
+        with patch.object(grasp.time, 'sleep'):
+            with patch.object(grasp.time, 'monotonic', side_effect=lambda: next(ticks)):
+                with self.assertRaisesRegex(grasp.RobotFault, 'did not settle'):
+                    grasp.close_and_lock(arm, 40.0, g)
+        gripped = [kw.get('mm') for cmd, kw in arm.calls if cmd == 'gripper']
+        self.assertEqual(gripped, [40.0, g['gripper_open_mm']])  # 只闭了一次然后开爪
+
     def test_instance_depth_excludes_background(self):
         rect = np.array([[10, 10], [90, 10], [90, 40], [10, 40]], float)
         contour = np.array([[10, 10], [90, 30], [90, 40], [10, 20]], np.int32)

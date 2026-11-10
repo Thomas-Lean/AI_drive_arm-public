@@ -127,8 +127,9 @@ grasp:                       # --- YOLO 抓取（grasp_yolo / yolo_detect 使用
   pregrasp_offset_m: 0.05    # 预抓取点沿选定进给方向后退 5 cm
   grasp_vel_dps: 10.0        # 抓取运动速度（低速保安全）
   wait_before_grip_s: 1.0    # 到位后等待时长再闭爪
-  gripper_open_mm: 65.0      # 张口（行程 0~65mm；目标物 ~6cm 宽需全开）
-  gripper_close_factor: 0.7  # 闭口=实测爪宽×系数（1.0=接触保持；<1 压实软物）
+  gripper_open_mm: 65.0      # 张口（行程 4~70mm；目标物 ~6cm 宽需全开）
+  gripper_close_factor: 0.7  # 只决定闭合到哪为止的上限（实测爪宽×系数）；
+                             #   夹住后锁在停住角（close_and_lock），不顶着物体保持
   gripper_close_min_mm: 15.0 # 闭口下限（防测量偏小时对刚性物硬闭堵转）
   grasp_offset_m: 0.015      # 到位深度微调：正值沿进给方向外退（治"到位太深"）
   min_base_z_m: 0.02         # 目标基座系 z 下限=工作面高度+余量（防砸台面）
