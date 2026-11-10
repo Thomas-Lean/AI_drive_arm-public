@@ -72,5 +72,16 @@ yoloe 注意：`set_classes` 需要 clip 包 + ~240 MB 文本编码器
 
 ## 与 d1t_sdk 的接口对照
 
-上层脚本实际用到的机器人调用共 7 组，迁移时逐项核对了 d1armd 语义与
-`d1t_sdk.D1Arm` 的对应关系，完整结论表随适配层一并提交（见下节）。
+上层脚本实际用到的机器人调用共 7 组（原 d1armd 语义 → 本项目 `d1t_sdk.D1Arm`），
+迁移时逐项核对，结论如下：
+
+| 原接口（d1armd） | 次数 | 本项目对应 | 核对结论 |
+|---|---|---|---|
+| `state()` | 13 | `D1Arm.state()` | `q_deg` 同为 6 关节 URDF 角（度，J6 夹爪不混入）；`online` 同 7 项；`stamp_ms` 同名（ms）。`mode`/`err` 在适配层映射：IDLE/HOLD→`'IDLE'`，轨迹/流式执行中→`'MOVING'`，ESTOP→`'IDLE'`+`err='estop'`（复刻 d1armd 锁存语义），FAULT→`err`=fault 位串 |
+| `move(pose, vel)` + `wait_still()` | 22 | `move_joints(async_=True)` + 轮询 | 到位容差与稳定窗沿用原配置（arrival 1.8° / settle 1.2 s / 波动 0.3°）；速度逐轴钳到控制器限速 100°/s，配置值 30/20°/s 远低于上限 |
+| `call('fk')` | 5 | `D1Arm.fk(q_deg)` | **TCP 定义与单位逐项一致**：原 TCP = Link6 法兰 × xyz(-5.62, 0, 70.6) mm、rpy(0, -90°, 0) = 本项目 `sdk/arm_model/d1t.json` 的 tcp（URDF 两夹爪指 origin 中点）；连杆参数同源（d1_description URDF）；`pos` 米、`quat` [w,x,y,z] 同序。数值比对见 `scripts/fk_compare.py`（对照 d1arm_sdk `tests/test_main.cpp` 金标，可离线重跑） |
+| `call('ik')` | 5 | `D1Arm.ik(pos, quat, seed)` | 参数同为 pos+quat(w,x,y,z)+seed → 6 URDF 角；无解时适配层转写为 `ik no solution …`（上层按前缀识别后换候选重试）；本项目限位宽于原校验限位，上层 J5 余量检查照常 |
+| `call('move_l')` | 1 | `D1Arm.move_l(pos, quat, vel, acc, async_=True)` | 位姿表示一致（quat 优先、米、m/s、m/s²）；上层随后 `wait_still(expected_q)` 轮询确认，适配层照常支持 |
+| `call('gripper')` | 3 | `D1Arm.gripper(mm)` | mm 语义同为金属指间距；本项目可达域 4–70 mm（实测标定表）⊇ 原 0–65 mm；J6 限速 ≤20°/s 相同 |
+| `call('estop')` | 6 | `D1Arm.estop()` | **差异已处理**：本项目急停锁存至 `reset()`，原为下一条轨迹自动清 → 适配层在每条运动命令前自动 `reset()`，上层恢复路径零改动 |
+| `call('damping')` / `call('set_joint')` | 3 | **无对应** | 仅 `scripts/teach_poses.py` 拖动示教用；本项目 `free_all` 是整臂失力（臂会掉），不许顶替 → 适配层显式拒绝，teach_poses 标记不支持（见「已知限制」），点位改为手填关节角 |
