@@ -643,19 +643,23 @@ class CalibrationTests(unittest.TestCase):
             def frame(self): return np.zeros((4,6,3),np.uint8),{}
             def close(self): pass
         # ready, free, lock+record, free, lock+record, u(undo), free, lock+record, q
-        lines=iter(['','','','','','u','','','q'])
-        class Stdin:
-            def readline(self): return next(lines)
+        import queue
+        class Keys:  # 逐个交出按键；empty() 恒真，模拟等待期间没有误按
+            def __init__(self,keys): self.keys=list(keys)
+            def empty(self): return True
+            def get_nowait(self):
+                if not self.keys: raise queue.Empty
+                return self.keys.pop(0)+'\n'
+        q=Keys(['','','','','','u','','','q'])
         with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
             config=Path(td)/'charuco.yaml'
             config.write_text(yaml.safe_dump(self.cfg,default_flow_style=None),encoding='utf-8')
             arm=Arm(None)
             with patch.object(teach,'RpcArm',return_value=arm),patch.object(teach,'Camera',CameraT),\
-                 patch.object(teach.sys,'stdin',Stdin()),\
-                 patch.object(teach.select,'select',side_effect=lambda *a: ([teach.sys.stdin],[],[])),\
+                 patch.object(teach,'start_stdin_reader',return_value=q),\
                  patch.object(teach.cv2,'namedWindow'),patch.object(teach.cv2,'imshow'),\
                  patch.object(teach.cv2,'waitKey',return_value=-1),\
-                 patch.object(teach.cv2,'destroyAllWindows'),patch.object(teach.time,'sleep'):
+                 patch.object(teach.cv2,'destroyAllWindows'),patch.object(teach,'SETTLE_S',0.0):
                 self.assertEqual(teach.main(['--config',str(config)]),0)
             self.assertEqual(arm.moves,[(self.cfg['robot']['ready_pose_deg'],
                                          self.cfg['robot']['approach_vel_dps'])])

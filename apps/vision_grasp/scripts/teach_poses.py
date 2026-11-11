@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """拖动示教采集点位：失力拖动 → 锁住 → 记录，结果直接写回配置文件的 poses_deg。
 
-流程（全部在终端按键，预览窗只看画面）：
+流程（终端或预览窗按键都行）：
   启动先锁住全臂 → 回车：低速走到 ready_pose_deg
   → 回车：全臂失力（先托住小臂！）→ 拖到想要的姿态
-  → 回车：锁住、等 0.6 s、记录当前关节角 → 回车：再失力拖下一个 …
+  → 回车：锁住、等 2 s、记录当前关节角 → 回车：再失力拖下一个 …
   其他按键：u = 删掉上一个点，q = 结束。
 记满 --n 个自动结束。每记一个点就把全部点位写回 --config 的 poses_deg
 （开始时先备份原文件为 <文件名>.bak-时间），另存一份 teach_poses_*.yaml 留档。
@@ -14,9 +14,10 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 import re
-import select
+import queue
 import shutil
 import sys
+import threading
 import time
 
 import cv2
@@ -26,7 +27,7 @@ from handeye import Camera, RobotFault, RpcArm, load_config, log  # noqa: E402
 from utils.paths import data_root  # noqa: E402
 from d1t_sdk._common import SERVO_LIMITS  # noqa: E402  （utils.robot 已把 sdk/ 加进 sys.path）
 
-SETTLE_S = 0.6  # 锁住后等这么久再读角度（含锁定瞬间的下沉）
+SETTLE_S = 2.0  # 锁住后等这么久再读角度（等锁定后的下沉稳定）
 POSE_LINE = re.compile(r'^\s*- \[')
 
 
@@ -69,6 +70,23 @@ def write_poses(config, poses):
     config.write_text(''.join(lines[:idx + 1] + new + lines[end:]), encoding='utf-8')
 
 
+def start_stdin_reader():
+    """后台线程逐行读终端，主循环从队列取（不依赖 select，SSH/各种终端都能收到回车）。"""
+    lines = queue.Queue()
+
+    def pump():
+        try:
+            while True:
+                line = sys.stdin.readline()
+                if not line:
+                    return
+                lines.put(line)
+        except Exception:  # noqa: BLE001 — 终端关闭等，主循环照常可用预览窗按键
+            return
+    threading.Thread(target=pump, daemon=True).start()
+    return lines
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--config', type=Path,
@@ -91,18 +109,38 @@ def main(argv=None):
         shutil.copy2(config, backup)
         log(f'已锁住。原配置备份为 {backup.name}；点位写回 {config.name}，留档 {archive.name}')
         log('回车 = 低速走到准备位（ready_pose_deg）')
-        window = 'teach preview  (terminal: Enter / u undo / q quit)'
+        window = 'teach preview  (Enter / u undo / q quit)'
         cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-        while len(captured) < args.n:
+        stdin_lines = start_stdin_reader()
+
+        def show(label):
+            """取一帧、叠字、显示，返回预览窗按键码。"""
             image, _ = camera.frame()
-            overlay(image, [{'start': 'LOCKED - Enter: go ready', 'held': 'LOCKED - Enter: free',
-                             'drag': 'FREE - drag, Enter: lock+record'}[stage],
-                            f'captured {len(captured)}/{args.n}'])
+            overlay(image, [label, f'captured {len(captured)}/{args.n}'])
             cv2.imshow(window, image)
-            cv2.waitKey(1)
-            if not select.select([sys.stdin], [], [], 0)[0]:
-                continue
-            key = sys.stdin.readline().strip().lower()
+            return cv2.waitKey(1) & 0xFF
+
+        def busy(label, until):
+            """等待期间预览照常刷新；期间误按的键全部丢弃（防止连按回车误失力）。"""
+            while not until():
+                show(label)
+            while not stdin_lines.empty():
+                stdin_lines.get_nowait()
+
+        show('LOCKED - Enter: go ready')
+        log('预览已出画面，等按键')
+        while len(captured) < args.n:
+            wk = show({'start': 'LOCKED - Enter: go ready', 'held': 'LOCKED - Enter: free',
+                       'drag': 'FREE - drag, Enter: lock+record'}[stage])  # 预览窗按键也认
+            if wk in (10, 13):
+                key = ''
+            elif wk in (ord('u'), ord('q')):
+                key = chr(wk)
+            else:
+                try:
+                    key = stdin_lines.get_nowait().strip().lower()
+                except queue.Empty:
+                    continue
             if key == 'q':
                 break
             if key == 'u':
@@ -120,7 +158,18 @@ def main(argv=None):
                 continue
             if stage == 'start':
                 log('低速走向准备位 …')
-                arm.move(cfg['robot']['ready_pose_deg'], vel=cfg['robot']['approach_vel_dps'])
+                result = {}
+
+                def go_ready():
+                    try:
+                        arm.move(cfg['robot']['ready_pose_deg'], vel=cfg['robot']['approach_vel_dps'])
+                    except Exception as exc:  # noqa: BLE001 — 交回主线程抛出
+                        result['error'] = exc
+                mover = threading.Thread(target=go_ready, daemon=True)
+                mover.start()
+                busy('MOVING to ready', lambda: not mover.is_alive())
+                if 'error' in result:
+                    raise result['error']
                 stage = 'held'
                 log('已到准备位。托住小臂后回车 = 失力')
             elif stage == 'held':
@@ -130,7 +179,9 @@ def main(argv=None):
             else:  # drag → 锁住、记录
                 arm.call('lock')
                 stage = 'held'
-                time.sleep(SETTLE_S)
+                log(f'已锁住，{SETTLE_S:.0f} s 后记录 …')
+                t_end = time.monotonic() + SETTLE_S
+                busy('LOCKED - settling', lambda: time.monotonic() >= t_end)
                 q, raw = read_joints(arm)
                 if q is None:
                     log('舵机反馈未就绪，本点没记。已锁住：回车失力后重新拖')

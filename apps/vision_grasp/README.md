@@ -142,7 +142,7 @@ YOLO 抓取（grasp_yolo.py，先 `--dry-run`）。每步一条命令、一条�
 
 | # | 限制 | 说明 |
 |---|---|---|
-| 1 | 拖动示教为整臂失力 | d1t_sdk 没有单轴阻尼，`scripts/teach_poses.py` 用整臂失力拖动、锁住后记录：**失力期间臂会掉，全程托住小臂**。用法：`python3 scripts/teach_poses.py --config config/<配置>.yaml [--n 32]`；回车依次 = 走准备位 → 失力 → 锁住并记录 → 失力 …，`u` 删上一个点，`q` 结束；超软限位的点不记；每记一点写回配置 `poses_deg`（启动时备份 `<配置>.bak-时间`）；任何退出都先锁住 |
+| 1 | 拖动示教为整臂失力 | d1t_sdk 没有单轴阻尼，`scripts/teach_poses.py` 用整臂失力拖动、锁住后记录：**失力期间臂会掉，全程托住小臂**。用法：`python3 scripts/teach_poses.py --config config/<配置>.yaml [--n 32]`；回车依次 = 走准备位 → 失力 → 锁住、2 s 后记录 → 失力 …，`u` 删上一个点，`q` 结束；超软限位的点不记；每记一点写回配置 `poses_deg`（启动时备份 `<配置>.bak-时间`）；任何退出都先锁住 |
 | 2 | estop 锁存语义差异 | 本项目急停锁存到 `reset()`（原工程下一条轨迹自动清）。适配层**只自动清本进程自己发的** estop；**外部** estop（别的终端/进程敲的）与任何 FAULT 都不自动清——运动命令抛错并带 fault 位，确认安全后手动 `python3 -m d1t_sdk reset`。脚本因 Ctrl-C/故障退出后重跑前，先 `python3 -m d1t_sdk state` 看一眼有无锁存 |
 | 3 | FK/IK 绝对精度 ±1 cm 量级 | 零位偏移未精标 + 重力下沉约 1 cm（SDK 不补偿，见仓库主 README 已知限制 #4/#7）。标定与抓取全用实测角与相对变换，不受累积影响，但 `min_base_z_m` 等余量按此留 |
 | 4 | J4≈90° 保持自激 | 手腕水平伸出保持会自激抖动触发 HOLD_FAIL（`reset()` 可恢复）；采集点位与预抓取姿态避开（仓库主 README #5） |

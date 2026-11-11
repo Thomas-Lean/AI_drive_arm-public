@@ -25,6 +25,7 @@ import yaml
 
 from utils.core import EarlyStop, MarkerDetector, assess, diversity, mean_transform, pose_matrix, spread
 from utils.robot import RobotFault, RpcArm, log  # 再导出供 scripts/ 与测试引用
+from d1t_sdk._joint_model import urdf_limits  # noqa: E402  (utils.robot 已把 sdk/ 加进 sys.path)
 from utils.camera import Camera
 from utils.paths import data_root
 
@@ -121,14 +122,14 @@ def load_config(path, motion=True):
             raise ValueError('robot.poses_deg must list at least one user-defined pose')
         if c['max_pose_attempts'] > len(poses):
             raise ValueError(f"max_pose_attempts {c['max_pose_attempts']} exceeds the {len(poses)} filled poses")
-        limits = np.array([135,90,90,135,90,135])
+        lims = np.array(urdf_limits())  # d1t_sdk 臂模型限位（sdk/arm_model/d1t.json），不另存一份
         for label, pose in [('ready_pose_deg',r.get('ready_pose_deg')),
                             ('safe_pose_deg',r.get('safe_pose_deg'))] + list(enumerate(poses, 1)):
             if (not isinstance(pose,list) or len(pose)!=6 or
                     any(isinstance(v,bool) or not isinstance(v,(int,float)) for v in pose)):
                 raise ValueError(f'Fill robot pose {label}: six joint angles in degrees')
             a = np.array(pose, float)
-            if not np.isfinite(a).all() or np.any(np.abs(a)>limits):
+            if not np.isfinite(a).all() or np.any(a < lims[:, 0]) or np.any(a > lims[:, 1]):
                 raise ValueError(f'Pose {label} exceeds URDF joint limits or is nonfinite')
     return cfg
 
