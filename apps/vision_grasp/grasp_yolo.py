@@ -23,10 +23,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handeye import RobotFault, RpcArm, load_config, log, pose_matrix  # noqa: E402
+from utils.device import resolve_device  # noqa: E402
 from utils.paths import data_root, ensure_text_encoder, resolve_model  # noqa: E402
 
 WINDOW = 'YOLO grasp  g:freeze+grasp  q:open+safe+quit'
-DEFAULTS = dict(conf=0.5, iou=0.45, device='cpu', classes=[],
+DEFAULTS = dict(conf=0.5, iou=0.45, device='auto', classes=[],
                 depth_quantile=0.5, open_axis='y', final_motion='linear',
                 linear_vel_mps=0.04, linear_acc_mps2=0.25, j5_margin_deg=5.0,
                 pregrasp_offset_m=0.05, grasp_offset_m=0.015,
@@ -356,6 +357,7 @@ def main(argv=None):
     if args.port:
         cfg['robot']['port'] = args.port
     g = {**DEFAULTS, **cfg.get('grasp', {})}
+    g['device'] = resolve_device(g['device'])  # auto → 有 N 卡用 cuda:0，否则 cpu
     if args.model:
         g['model'] = args.model
     # 相对权重路径按标定根目录（models/）解析

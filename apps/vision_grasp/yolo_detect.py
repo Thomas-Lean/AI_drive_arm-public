@@ -32,18 +32,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=here / 'config' / 'default.yaml')
     parser.add_argument('--model', help='Override grasp.model YOLO weights')
-    parser.add_argument('--device', help="Override grasp.device ('cpu'/'cuda:0'/...)")
+    parser.add_argument('--device', help="Override grasp.device ('auto'/'cpu'/'cuda:0'/...)")
     args = parser.parse_args(argv)
     cfg = yaml.safe_load(args.config.read_text(encoding='utf-8')) or {}
     camera = cfg.get('camera') or {}
-    grasp = dict(conf=0.5, iou=0.45, device='cpu', classes=[])
+    grasp = dict(conf=0.5, iou=0.45, device='auto', classes=[])
     grasp.update(cfg.get('grasp') or {})
     if args.model:
         grasp['model'] = args.model
     if args.device:
         grasp['device'] = args.device
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from utils.device import resolve_device
     from utils.paths import data_root, ensure_text_encoder, resolve_model
+    grasp['device'] = resolve_device(grasp['device'])  # auto → 有 N 卡用 cuda:0，否则 cpu
     model_path = resolve_model(grasp.get('model', ''), args.config)
     if not model_path.is_file():
         raise ValueError(f'YOLO weights not found: {model_path} '

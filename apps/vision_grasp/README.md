@@ -67,7 +67,7 @@ pip3 install --user -r apps/vision_grasp/requirements.txt
 pip3 install --user pyrealsense2   # 相机，标定/检测/抓取需要
 ```
 
-**torch/ultralytics 分两档，主推 CPU 版**（配置默认 `grasp.device: cpu`）：
+**torch/ultralytics 分两档，按本机装一种**（配置默认 `grasp.device: auto`：装了 GPU 版且有 N 卡就用 `cuda:0`，否则用 `cpu`，两种都不用改配置；要强制某一种就填 `cpu` / `cuda:0`，或命令行 `--device`）：
 
 ```bash
 # ① CPU 版（默认，够用；首次推理几十秒/帧属正常）
@@ -76,7 +76,7 @@ pip3 install --user ultralytics
 # 国内可改用镜像直链（例：mirrors.aliyun.com/pytorch-wheels/cpu/ 下与
 # 本机 Python/CPU 匹配的 torch-*.whl、torchvision-*.whl）
 
-# ② GPU 版（可选，有 N 卡时把 config/default.yaml 的 grasp.device 改 cuda:0）
+# ② GPU 版（有 N 卡时装；配置 auto 会自动用上）
 #    注意 RTX 50 系（Blackwell，sm_120）必须 torch ≥ 2.7.1+cu128，
 #    2.6.x 及更早的 cu124/cu126 轮子不含其内核（报 no kernel image available）
 pip3 install --user torch==2.7.1+cu128 torchvision==0.22.1+cu128 \

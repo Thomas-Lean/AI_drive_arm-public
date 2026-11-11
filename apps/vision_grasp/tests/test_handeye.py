@@ -678,6 +678,17 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(teach.out_of_limits([0.0,0.0,500.0,0.0,0.0,0.0]),[2])
         self.assertEqual(teach.out_of_limits(None),[])
 
+    def test_resolve_device(self):
+        from utils.device import resolve_device
+        self.assertEqual(resolve_device('cpu'),'cpu')
+        self.assertEqual(resolve_device('cuda:0'),'cuda:0')
+        fake=type(sys)('torch'); fake.cuda=type('C',(),{'is_available':staticmethod(lambda: True)})
+        with patch.dict(sys.modules,{'torch':fake}):
+            self.assertEqual(resolve_device('auto'),'cuda:0')
+        fake.cuda=type('C',(),{'is_available':staticmethod(lambda: False)})
+        with patch.dict(sys.modules,{'torch':fake}):
+            self.assertEqual(resolve_device('AUTO'),'cpu')
+
     def test_paths_and_text_encoder_link(self):
         from utils import paths
         with tempfile.TemporaryDirectory() as td:
