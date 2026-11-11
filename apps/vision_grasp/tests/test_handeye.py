@@ -678,6 +678,20 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(teach.out_of_limits([0.0,0.0,500.0,0.0,0.0,0.0]),[2])
         self.assertEqual(teach.out_of_limits(None),[])
 
+    def test_top_down_rotation(self):
+        import grasp_yolo as gy
+        t_base_camera=np.eye(4)
+        t_base_camera[:3,:3]=cv2.Rodrigues(np.array([2.5,0.3,0.2]))[0]  # 斜视相机
+        grasp=dict(open_axis=np.array([0.6,0.8,0.0]))
+        r=gy.top_down_rotation(grasp,t_base_camera,'y')
+        np.testing.assert_allclose(r[:,0],[0,0,-1],atol=1e-9)        # 竖直向下进给
+        self.assertAlmostEqual(r[2,1],0.0,places=9)                    # 爪开合方向水平
+        o=t_base_camera[:3,:3]@grasp['open_axis']; o[2]=0; o/=np.linalg.norm(o)
+        self.assertAlmostEqual(abs(r[:,1]@o),1.0,places=9)             # 沿物体短边
+        self.assertAlmostEqual(np.linalg.det(r),1.0,places=9)
+        t_base_camera[:3,:3]=np.eye(3)
+        self.assertIsNone(gy.top_down_rotation(dict(open_axis=np.array([0,0,1.0])),t_base_camera))
+
     def test_resolve_device(self):
         from utils.device import resolve_device
         self.assertEqual(resolve_device('cpu'),'cpu')

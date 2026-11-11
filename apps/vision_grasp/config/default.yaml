@@ -33,7 +33,7 @@ robot:                       # --- 机械臂（d1t_sdk.D1Arm，DDS 直连 d1t_ar
   move_timeout_s: 45.0       # 单次运动到位超时
   vel_dps: 90.0              # 采集点之间的关节速度（°/s；控制器逐轴限速 100°/s）
   acc_dps2: 100.0             # 关节加速度（°/s²）
-  approach_vel_dps: 20.0     # ready/safe 姿态的低速接近速度（°/s）
+  approach_vel_dps: 40.0     # ready/safe 姿态的低速接近速度（°/s）
   offline_grace_s: 5.0       # 瞬时舵机掉线容忍窗：超窗才判故障；7/7 掉线立即判故障。
                              #   本控制器偶发缺回包沿用上次值、连续 200 ms 才判故障，
                              #   此判据留作冗余防线
@@ -127,14 +127,15 @@ grasp:                       # --- YOLO 抓取（grasp_yolo / yolo_detect 使用
                              # 物理目标=弹性握力球+矿泉水瓶。
                              # 注意：yoloe 下清空此表 => 不做 set_classes => 零检测！
   depth_quantile: 0.5        # 抓取点深度分位（0.5≈物心，reBot 出厂值）
+  approach: top_down         # top_down=竖直向下进给、爪夹物体水平短边（躺放物体）；camera_ray=沿相机视线进给
   open_axis: "y"             # 爪开合轴在 SDK TCP 系的方向：y 或 z（首抓 90° 错位则换）
   final_motion: "linear"     # 末段及原路退出：linear=move_l；joint=关节插补
-  linear_vel_mps: 0.04       # 末段期望平均 TCP 速度（米/秒）
+  linear_vel_mps: 0.08       # 末段期望平均 TCP 速度（米/秒）
   linear_acc_mps2: 0.25      # 末段 TCP 加速度参数（米/秒²）
   j5_margin_deg: 5.0         # 候选 IK 在 J5 两端各留 5°，即 |J5| <= 85°
   pregrasp_offset_m: 0.05    # 预抓取点沿选定进给方向后退 5 cm
-  grasp_vel_dps: 10.0        # 抓取运动速度（低速保安全）
-  wait_before_grip_s: 1.0    # 到位后等待时长再闭爪
+  grasp_vel_dps: 30.0        # 抓取运动速度（低速保安全）
+  wait_before_grip_s: 0.5    # 到位后等待时长再闭爪
   gripper_open_mm: 65.0      # 张口（行程 4~70mm；目标物 ~6cm 宽需全开）
   gripper_close_factor: 0.7  # 只决定闭合到哪为止的上限（实测爪宽×系数）；
                              #   夹住后锁在停住角（close_and_lock），不顶着物体保持

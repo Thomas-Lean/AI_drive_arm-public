@@ -27,7 +27,7 @@ from utils.device import resolve_device  # noqa: E402
 from utils.paths import data_root, ensure_text_encoder, resolve_model  # noqa: E402
 
 WINDOW = 'YOLO grasp  g:freeze+grasp  q:open+safe+quit'
-DEFAULTS = dict(conf=0.5, iou=0.45, device='auto', classes=[],
+DEFAULTS = dict(conf=0.5, iou=0.45, device='auto', approach='camera_ray', classes=[],
                 depth_quantile=0.5, open_axis='y', final_motion='linear',
                 linear_vel_mps=0.04, linear_acc_mps2=0.25, j5_margin_deg=5.0,
                 pregrasp_offset_m=0.05, grasp_offset_m=0.015,
@@ -111,8 +111,22 @@ def grasp_camera(rect, depth_mm, k, quantile, contour=None):
 def tcp_rotation(grasp, t_base_camera, open_axis='y'):
     """Map the camera ray and measured short axis into the D1 TCP convention."""
     rotation = t_base_camera[:3, :3]
-    into = -(rotation @ grasp['approach'])
-    open_3d = rotation @ grasp['open_axis']
+    return _tcp_frame(-(rotation @ grasp['approach']), rotation @ grasp['open_axis'], open_axis)
+
+
+def top_down_rotation(grasp, t_base_camera, open_axis='y'):
+    """竖直向下进给（TCP x = 基座 −Z），爪开合方向 = 物体短边在水平面内的方向。
+    短边投影到水平面后过短（物体在图里几乎竖着看）返回 None。"""
+    open_3d = t_base_camera[:3, :3] @ grasp['open_axis']
+    open_3d = np.array([open_3d[0], open_3d[1], 0.0])
+    norm = np.linalg.norm(open_3d)
+    if norm < 0.2:
+        return None
+    return _tcp_frame(np.array([0.0, 0.0, -1.0]), open_3d / norm, open_axis)
+
+
+def _tcp_frame(into, open_3d, open_axis):
+    """进给方向 into + 爪开合方向 → TCP 旋转矩阵（列 = TCP x/y/z，x 为进给方向）。"""
     if open_axis == 'y':
         y, z = open_3d, np.cross(into, open_3d)
     else:
@@ -364,6 +378,8 @@ def main(argv=None):
     g['model'] = str(resolve_model(g['model'], args.config))
     if g['open_axis'] not in ('y', 'z'):
         raise ValueError('grasp.open_axis must be y or z')
+    if g['approach'] not in ('top_down', 'camera_ray'):
+        raise ValueError('grasp.approach must be top_down or camera_ray')
     if g['final_motion'] not in ('linear', 'joint'):
         raise ValueError('grasp.final_motion must be linear or joint')
     for key in ('linear_vel_mps', 'linear_acc_mps2', 'pregrasp_offset_m', 'grasp_vel_dps'):
@@ -466,8 +482,17 @@ def main(argv=None):
                 q_meas = state['q_deg']
                 t_base_tcp = pose_matrix(arm.call('fk', q=q_meas)['pose'])
                 t_base_camera = t_base_tcp @ t_tcp_camera
-                nominal = tcp_rotation(grasp, t_base_camera, g['open_axis'])
                 object_pos = (t_base_camera @ np.append(grasp['position'], 1.0))[:3]
+                if g['approach'] == 'top_down':
+                    nominal = top_down_rotation(grasp, t_base_camera, g['open_axis'])
+                    if nominal is None:
+                        log('Short side is not horizontal enough for a top-down grasp; '
+                            'select again or use grasp.approach: camera_ray')
+                        continue
+                    # 检测点在物体朝相机的表面上；竖直下抓时目标降到物体中线高度（下沉半个爪宽）
+                    object_pos = object_pos - np.array([0.0, 0.0, grasp['jaw_m'] / 2])
+                else:
+                    nominal = tcp_rotation(grasp, t_base_camera, g['open_axis'])
                 plan = plan_grasp(arm, object_pos, nominal, q_meas, g)
                 if plan is None:
                     log('No feasible grasp for this frame; waiting for another selection')
