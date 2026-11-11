@@ -45,11 +45,11 @@ STATE_TIMEOUT_S = 5.0  # 等第一帧 ArmState 的超时（同 send.py 默认）
 # J1=-90 ≥ -90.3、J2=88.5 ≤ 89
 PARK_SERVO_DEG = (0.0, -90.0, 88.5, 0.0, 0.0, 0.0)
 PARK_TOLERANCE_DEG = 3.0  # park 每段到位容差（沿用旧项目 F16 归位容差）
-# park 起步夹爪判定：空夹全程约 14 mA（F60），带物最低约 58–70 mA（F61）。
-# 判空 = J6 电流 < PARK_GRIP_EMPTY_MA 且 |命令−反馈| ≤ PARK_GRIP_GAP_MM（夹爪标定表换算 mm）
-PARK_GRIP_EMPTY_MA = 40
-PARK_GRIP_GAP_MM = 3.0
-PARK_GRIP_OPEN_MM = 70.0
+# park 起步夹爪检查：反馈开口 ≥ PARK_GRIP_OPEN_MIN_MM（接近全开 70 mm）才收臂，否则拒绝。
+# 不用电流/位置差判空：目标贴着物体停住角时电流 ≈ 空载、命令≈反馈（F69），与空夹分不出
+# （实机：命令 47.2 mm 夹 330 ml 瓶被判为空、张开掉瓶）。是否有物由人确认后自行张开。
+PARK_GRIP_OPEN_MIN_MM = 65.0
+START_FALLBACK_DEG = 3.0  # 轨迹起点用命令角；与实测差超过此值的轴退回实测角（同到位容差 F16）
 PARK_SETTLE_S = 0.5  # 最后一段到位后停多久再 free_all
 JOINT_VEL_MAX_DPS = min(URDF_VMAX_DPS)  # 用户 vel_dps 上限（各轴 100 °/s），超出报错不钳
 
@@ -264,6 +264,19 @@ class D1Arm:
             out.append(qt if math.isfinite(qt) else float(st.q[i]))
         return out
 
+    def _start_q_urdf(self, st):
+        """轨迹起点（URDF 角 6）：取保持目标 _base7（命令角），不取实测角。
+        负载轴（J1/J2）保持时实测角比命令角低约 0.5–1°，这点差是舵机顶住重力的出力；
+        从实测角起步，第一帧目标就降到下沉后的角度，出力消失，臂在起转前先掉一下（F87 实验 A/B/C）。
+        命令角与实测角相差超过 START_FALLBACK_DEG（被外力推开、刚恢复等）的轴退回实测角，避免起步跳变。"""
+        base = self._base7(st)
+        out = []
+        for i in range(6):
+            meas = float(st.q[i])
+            b = base[i] if abs(base[i] - meas) <= START_FALLBACK_DEG else meas
+            out.append(servo_to_joint(i, b))
+        return out
+
     def _to_servo7(self, q_urdf_deg, st=None):
         """6 关节 URDF 角 + J6 保持目标（舵机角，见 _base7）→ 7 轴舵机角向量。"""
         if st is None:
@@ -331,7 +344,7 @@ class D1Arm:
         check_q_urdf(q1)
         st = self._wait_state()
         self._check_ctrl_for_motion(st, "move_joints")
-        q0 = [servo_to_joint(i, float(st.q[i])) for i in range(6)]
+        q0 = self._start_q_urdf(st)
         samples, t_s = plan_joint_move(q0, q1, vel_dps, acc_dps2, DT_MS, URDF_VMAX_DPS)
         servo_samples = [self._to_servo7(s, st) for s in samples]
         job = self._submit_traj(servo_samples, t_s, desc="move_joints")
@@ -352,7 +365,7 @@ class D1Arm:
         _v.flag("async_", async_)
         st = self._wait_state()
         self._check_ctrl_for_motion(st, "home")
-        q0 = [servo_to_joint(i, float(st.q[i])) for i in range(6)]
+        q0 = self._start_q_urdf(st)
         q1 = [0.0] * 6
         maxd = max(abs(q1[i] - q0[i]) for i in range(6))
         vel = 1.875 * maxd / t_s
@@ -368,9 +381,8 @@ class D1Arm:
         """慢速回折叠位（原厂 HOME 姿势，F7）后全轴失力——下电收臂用。
 
         目标舵机角 PARK_SERVO_DEG（J1/J2 留限位余量，见常量注释）。顺序：
-        ① 夹爪判定：J6 电流 < PARK_GRIP_EMPTY_MA 且 |q_target[6]−q[6]|（换算 mm）
-           ≤ PARK_GRIP_GAP_MM 判为空 → gripper(70) 张开（等走完）；否则判为夹着东西，
-           抛 D1ArmError，一条运动命令都不发。
+        ① 夹爪检查：反馈开口 < PARK_GRIP_OPEN_MIN_MM（夹爪未张开）→ 抛 D1ArmError，
+           一条运动命令都不发；park 不替人张夹爪（有没有夹东西由人确认后 gripper(70)）。
         ② 腕部回零：J3/J4/J5 → 0（都已在容差内则跳过）；J0/J1/J2 保持命令角。
         ③ 大小臂收回：J0/J1/J2 同时 → 折叠位目标，一段关节插值同步到达。
         ④ 停 PARK_SETTLE_S（0.5 s）→ free_all()（全轴含 J6 失力，臂靠在折叠位机械限位上）。
@@ -393,14 +405,13 @@ class D1Arm:
         q_meas = [servo_to_joint(i, float(st.q[i])) for i in range(6)]
         q_cmd = [servo_to_joint(i, cmd_servo(st, i)) for i in range(6)]
 
-        # ① 夹爪判定（不通过则一轴都不动）
-        cur_ma = abs(int(st.current_ma[6]))
-        gap_mm = abs(gripper_deg_to_mm(cmd_servo(st, 6)) - gripper_deg_to_mm(float(st.q[6])))
-        if cur_ma >= PARK_GRIP_EMPTY_MA or gap_mm > PARK_GRIP_GAP_MM:
-            raise D1ArmError(f"park 拒绝：夹爪可能夹着东西（J6 电流 {cur_ma} mA、"
-                             f"命令与反馈差 {gap_mm:.1f} mm），请先松开/取下物体再 park")
-        self.gripper(PARK_GRIP_OPEN_MM)
-        grip = {"current_ma": cur_ma, "gap_mm": round(gap_mm, 2)}
+        # ① 夹爪检查（未张开则一轴都不动）
+        open_mm = gripper_deg_to_mm(float(st.q[6]))
+        if open_mm < PARK_GRIP_OPEN_MIN_MM:
+            raise D1ArmError(f"park 拒绝：夹爪未张开（开口 {open_mm:.1f} mm < "
+                             f"{PARK_GRIP_OPEN_MIN_MM:g} mm）。确认没有夹东西后先 "
+                             "gripper 70，再 park")
+        grip = {"open_mm": round(open_mm, 1)}
 
         already = max(abs(q_meas[i] - target[i]) for i in range(6)) <= PARK_TOLERANCE_DEG
         segments = []
@@ -624,7 +635,7 @@ class D1Arm:
         check_q_urdf(q_target)
         st = self._wait_state()
         self._check_ctrl_for_motion(st, "move_j")
-        q0 = [servo_to_joint(i, float(st.q[i])) for i in range(6)]
+        q0 = self._start_q_urdf(st)
         samples, t_s = plan_joint_move(q0, q_target, vel_dps, acc_dps2, DT_MS, URDF_VMAX_DPS)
         servo_samples = [self._to_servo7(s, st) for s in samples]
         job = self._submit_traj(servo_samples, t_s, desc="move_j")
@@ -642,7 +653,7 @@ class D1Arm:
         _v.flag("async_", async_)
         st = self._wait_state()
         self._check_ctrl_for_motion(st, "move_l")
-        q0 = [servo_to_joint(i, float(st.q[i])) for i in range(6)]
+        q0 = self._start_q_urdf(st)
         pose_a = self._kin.fk([deg2rad(q) for q in q0])
         pose_b = from_pose_dict(pos, rpy=rpy, quat=quat)
         lims = urdf_limits()
@@ -668,7 +679,7 @@ class D1Arm:
         _v.flag("async_", async_)
         st = self._wait_state()
         self._check_ctrl_for_motion(st, "move_c")
-        q0 = [servo_to_joint(i, float(st.q[i])) for i in range(6)]
+        q0 = self._start_q_urdf(st)
         pose_a = self._kin.fk([deg2rad(q) for q in q0])
         pose_via = from_pose_dict(via, rpy=via_rpy, quat=via_quat)
         pose_b = from_pose_dict(pos, rpy=rpy, quat=quat)
@@ -774,7 +785,7 @@ def _cli():
             arm.home(4.0)
             print("done:", [round(x, 2) for x in arm.state()["q_deg"]])
         elif op == "park":
-            # 下电收臂：夹爪判定→腕部回零→大小臂收回→停 0.5 s 失力，断电由人做
+            # 下电收臂：夹爪须已张开→腕部回零→大小臂收回→停 0.5 s 失力，断电由人做
             result = arm.park()
             if result["already_parked"]:
                 print("已在折叠位，未动")
