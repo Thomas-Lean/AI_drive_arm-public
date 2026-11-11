@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""park（回折叠位准备下电）离线测试：目标换算、夹爪判定（夹着东西拒绝且零运动）、
-两段顺序与目标（不动轴=命令角）、已在折叠位只判夹爪+失力、0.5 s 后 free_all、
+"""park（回折叠位准备下电）离线测试：目标换算、夹爪检查（未张开拒绝且零运动）、
+两段顺序与目标（不动轴=命令角）、已在折叠位只检查夹爪+失力、0.5 s 后 free_all、
 到位超差抛错。复用 test_stream_executor 的 FakeCtrl（假控制器，无 DDS）。"""
 import math
 import sys
@@ -20,9 +20,9 @@ from d1t_sdk._joint_model import (gripper_mm_to_deg, joint_to_servo, servo_to_jo
 from test_stream_executor import Emitter, FakeCtrl, make_arm
 
 # 起点用的舵机角（URDF 角经 sign 换算；J0/J3 sign=-1）
-EXTENDED_Q_SERVO = [0.0] * 6 + [29.0]                      # 前伸（URDF 全零）+ J6 29°
-POSED_Q_SERVO = [0.0, -40.0, 60.0, 0.0, 30.0, 0.0, 29.0]  # 常用示例姿态（舵机角）
-OPEN_J6 = gripper_mm_to_deg(70.0)                          # park 张开夹爪的 J6 目标
+OPEN_J6 = gripper_mm_to_deg(70.0)                          # 夹爪全开 J6 角（park 前须张开）
+EXTENDED_Q_SERVO = [0.0] * 6 + [OPEN_J6]                   # 前伸（URDF 全零）+ 夹爪全开
+POSED_Q_SERVO = [0.0, -40.0, 60.0, 0.0, 30.0, 0.0, OPEN_J6]  # 常用示例姿态（舵机角）
 
 MODE_STREAM, MODE_HOLD, MODE_RELEASE = 0, 1, 2
 
@@ -111,44 +111,44 @@ class TestPark(unittest.TestCase):
             result = arm.park()
         return result, marks
 
-    # ---------- 夹爪判定 ----------
+    # ---------- 夹爪检查 ----------
 
-    def test_holding_high_current_raises_no_motion(self):
-        """J6 电流 ≥ 40 mA → 判为夹着东西，抛错，零命令。"""
-        fc = ParkCtrl(POSED_Q_SERVO, j6_current_ma=60)
+    def test_gripper_closed_raises_no_motion(self):
+        """夹爪未张开（J6 29° ≈ 45 mm）→ 抛错，零命令。"""
+        q = list(POSED_Q_SERVO)
+        q[6] = 29.0
+        fc = ParkCtrl(q, j6_current_ma=14)
         arm = self._arm(fc)
-        with self.assertRaisesRegex(D1ArmError, "夹着东西"):
+        with self.assertRaisesRegex(D1ArmError, "未张开"):
             arm.park()
         self.assertEqual(fc.cmds, [])
 
-    def test_holding_gap_over_3mm_raises_no_motion(self):
-        """电流低但命令与反馈差 > 3 mm（被物体挡住）→ 抛错，零命令。"""
+    def test_holding_with_target_at_contact_raises(self):
+        """实机复现：命令 47.2 mm 夹瓶，电流低、命令≈反馈 → 仍须拒绝（旧判定在此张开掉瓶）。"""
         q = list(POSED_Q_SERVO)
-        q[6] = gripper_mm_to_deg(30.0)           # 反馈 30 mm
+        q[6] = gripper_mm_to_deg(47.5)
         qt = list(POSED_Q_SERVO)
-        qt[6] = gripper_mm_to_deg(20.0)          # 命令 20 mm，差 10 mm
-        fc = ParkCtrl(q, q_target=qt, j6_current_ma=14)
+        qt[6] = gripper_mm_to_deg(47.2)
+        fc = ParkCtrl(q, q_target=qt, j6_current_ma=16)
         arm = self._arm(fc)
-        with self.assertRaisesRegex(D1ArmError, "夹着东西"):
+        with self.assertRaisesRegex(D1ArmError, "未张开"):
             arm.park()
         self.assertEqual(fc.cmds, [])
 
-    def test_gap_within_3mm_low_current_is_empty(self):
-        """电流低、差 2 mm 以内 → 判空，正常执行（第一条轨迹 = 张开夹爪）。"""
-        q = list(POSED_Q_SERVO)
-        q[6] = gripper_mm_to_deg(30.0)
-        qt = list(POSED_Q_SERVO)
-        qt[6] = gripper_mm_to_deg(28.0)
-        fc = ParkCtrl(q, q_target=qt, j6_current_ma=14)
+    def test_gripper_open_no_gripper_motion(self):
+        """夹爪已张开（70 mm）→ 不发夹爪轨迹，J6 全程保持张开。"""
+        fc = ParkCtrl(EXTENDED_Q_SERVO, j6_current_ma=14)
         arm = self._arm(fc)
         result, _ = self._run_park_spy_sleep(arm, fc)
         self.assertTrue(result["freed"])
-        self.assertAlmostEqual(self._motion_groups(fc)[0][-1][6], OPEN_J6, places=4)
+        for g in self._motion_groups(fc):
+            for sample in g:
+                self.assertAlmostEqual(sample[6], OPEN_J6, places=4)
 
     # ---------- 顺序与目标 ----------
 
     def test_two_segments_order_targets_held_axes_use_q_target(self):
-        """空夹：先张开 → 段1 腕部回零（J0–J2=命令角，非实测）→ 段2 J0–J2 同收 →
+        """夹爪已开：段1 腕部回零（J0–J2=命令角，非实测）→ 段2 J0–J2 同收 →
         0.5 s 后 free_all（最后一条命令）。"""
         qt = list(POSED_Q_SERVO)
         q = list(POSED_Q_SERVO)
@@ -161,10 +161,8 @@ class TestPark(unittest.TestCase):
         self.assertFalse(result["already_parked"])
         self.assertEqual([s[0] for s in result["segments"]], ["1-腕部回零", "2-大小臂收回"])
         groups = self._motion_groups(fc)
-        self.assertEqual(len(groups), 3)   # 张开夹爪 + 两段
-        grip, seg1, seg2 = (g[-1] for g in groups)
-        # 张开夹爪
-        self.assertAlmostEqual(grip[6], OPEN_J6, places=4)
+        self.assertEqual(len(groups), 2)   # 两段
+        seg1, seg2 = (g[-1] for g in groups)
         # 段1：J3/J4/J5 → 0；J0/J1/J2 = 命令角 q_target（不是下沉后的实测角）
         for i in (0, 1, 2):
             self.assertAlmostEqual(seg1[i], qt[i], places=4)
@@ -175,7 +173,7 @@ class TestPark(unittest.TestCase):
         for i in range(6):
             self.assertAlmostEqual(seg2[i], PARK_SERVO_DEG[i], places=4)
         # 段2 是同步插值：J1、J2 在同一条轨迹里一起动（中点处都已离开起点）
-        mid = groups[2][len(groups[2]) // 2]
+        mid = groups[1][len(groups[1]) // 2]
         self.assertGreater(abs(mid[1] - seg1[1]), 1.0)
         self.assertGreater(abs(mid[2] - seg1[2]), 1.0)
         # 0.5 s 停顿在最后一帧之后、free_all（RELEASE，最后一条命令）之前
@@ -188,33 +186,29 @@ class TestPark(unittest.TestCase):
 
     def test_wrist_already_zero_skips_segment1(self):
         """腕部已在 0 的 3° 内：只走段2。"""
-        fc = ParkCtrl([0.0, -40.0, 60.0, 1.0, -2.0, 0.5, 29.0], j6_current_ma=14)
+        fc = ParkCtrl([0.0, -40.0, 60.0, 1.0, -2.0, 0.5, OPEN_J6], j6_current_ma=14)
         arm = self._arm(fc)
         result, _ = self._run_park_spy_sleep(arm, fc)
         self.assertEqual([s[0] for s in result["segments"]], ["2-大小臂收回"])
-        self.assertEqual(len(self._motion_groups(fc)), 2)  # 张开夹爪 + 段2
+        self.assertEqual(len(self._motion_groups(fc)), 1)  # 只有段2
         self.assertEqual(fc.cmds[-1].mode, MODE_RELEASE)
 
-    def test_already_parked_only_gripper_and_free(self):
-        """已在折叠位：只张开夹爪（判定通过）+ 0.5 s + free_all，J0–J5 不发运动。"""
-        fc = ParkCtrl(list(PARK_SERVO_DEG) + [29.0], j6_current_ma=14)
+    def test_already_parked_only_check_and_free(self):
+        """已在折叠位且夹爪已开：不发任何运动，0.5 s + free_all。"""
+        fc = ParkCtrl(list(PARK_SERVO_DEG) + [OPEN_J6], j6_current_ma=14)
         arm = self._arm(fc)
         result, marks = self._run_park_spy_sleep(arm, fc)
         self.assertTrue(result["already_parked"])
         self.assertEqual(result["segments"], [])
-        groups = self._motion_groups(fc)
-        self.assertEqual(len(groups), 1)   # 只有张开夹爪
-        for sample in groups[0]:
-            for i in range(6):
-                self.assertAlmostEqual(sample[i], PARK_SERVO_DEG[i], places=4)
+        self.assertEqual(self._motion_groups(fc), [])
         self.assertEqual(len(marks), 1)
         self.assertEqual(fc.cmds[-1].mode, MODE_RELEASE)
 
-    def test_already_parked_but_holding_raises(self):
-        """已在折叠位也要过夹爪判定：夹着东西 → 抛错、不失力。"""
-        fc = ParkCtrl(list(PARK_SERVO_DEG) + [29.0], j6_current_ma=70)
+    def test_already_parked_but_gripper_closed_raises(self):
+        """已在折叠位也要过夹爪检查：未张开 → 抛错、不失力。"""
+        fc = ParkCtrl(list(PARK_SERVO_DEG) + [29.0], j6_current_ma=14)
         arm = self._arm(fc)
-        with self.assertRaisesRegex(D1ArmError, "夹着东西"):
+        with self.assertRaisesRegex(D1ArmError, "未张开"):
             arm.park()
         self.assertEqual(fc.cmds, [])
 
@@ -222,7 +216,7 @@ class TestPark(unittest.TestCase):
         """段1 到位超差 → 抛 D1ArmError，不发段2、不 free_all。"""
 
         class StuckCtrl(ParkCtrl):
-            """J0–J5 不跟随命令（模拟堵转）；J6 照常跟随，让夹爪张开能完成。"""
+            """J0–J5 不跟随命令（模拟堵转）。"""
 
             def send_cmd(self, cmd):
                 with self._lk:
@@ -235,7 +229,7 @@ class TestPark(unittest.TestCase):
         arm = self._arm(fc)
         with self.assertRaisesRegex(D1ArmError, r"超差"):
             arm.park()
-        self.assertEqual(len(self._motion_groups(fc)), 2)  # 张开夹爪 + 段1
+        self.assertEqual(len(self._motion_groups(fc)), 1)  # 只有段1
         self.assertFalse(any(c.mode == MODE_RELEASE for c in fc.cmds))
 
     def test_async_rejected(self):

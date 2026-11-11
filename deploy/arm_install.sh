@@ -16,6 +16,8 @@ fi
 
 echo "== 1/3 编译（Release） =="
 cmake -S "$CTRL" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release
+# 臂上时钟常与上位机不一致：旧产物若时间戳在「未来」，make 会跳过重新链接，跑的仍是旧版本 → 先删产物强制链接
+rm -f "$BUILD/d1t_arm_ctrl"
 cmake --build "$BUILD" -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 # 配置输出里「D1T DDS: ON」才有 DDS（跨机收发）；OFF 时只能 --fake-client
 
