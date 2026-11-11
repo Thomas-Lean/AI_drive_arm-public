@@ -155,6 +155,7 @@ YOLO 抓取（grasp_yolo.py，先 `--dry-run`）。每步一条命令、一条�
 | 10 | `robot.host`/`robot.port` 为占位 | 上层配置校验要求非空；DDS 连接实际由 `source deploy/env.sh` 设置的 `CYCLONEDDS_URI` 决定，适配层忽略这两项 |
 | 11 | 安全位姿 J2 = 89° | 实测限位 J2 ∈ [-97, 89]°，原工程 safe_pose 的 90° 超上界 1°，配置已改 89° |
 | 12 | 闭爪后锁停住角 | 闭口目标（实测爪宽 × `gripper_close_factor`）**只决定闭合到哪为止**：夹住后轮询 J6 开度，稳定（连续 3 帧每帧 <0.3°）即重发实测开度锁在停住角——顶物体保持会堵转发热（实测目标比停住角多闭约 3° 即 >300 mA、82 s 内 J6 40→45 ℃）。空夹（开度 ≤ 闭口下限+2 mm）或 2 s 不稳定自动开爪报错，不保持 |
+| 13 | 两种板手眼解不一致，以 ChArUco 为准 | 同臂同 32 点位两轮均 qualified，但单 ArUco 与 ChArUco 的 `T_tcp_camera` 差 4.9 mm / 4.2°（0.3 m 处约 2 cm）；互换解释对方数据误差升到 17–18 mm；尺量板角前向距离与 ChArUco 解一致（差 1–2 cm 内）、与单 ArUco 解差约 2 cm。故检测与抓取一律 `--config config/charuco.yaml`（读 `hand_eye_charuco.npz`）；单 ArUco 偏差原因未查 |
 
 ## 参考与验证
 
