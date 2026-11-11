@@ -28,7 +28,7 @@ from utils.paths import data_root, ensure_text_encoder, resolve_model  # noqa: E
 
 WINDOW = 'YOLO grasp  g:freeze+grasp  q:open+safe+quit'
 DEFAULTS = dict(conf=0.5, iou=0.45, device='auto', approach='camera_ray', classes=[],
-                depth_quantile=0.5, open_axis='y', final_motion='linear',
+                depth_quantile=0.5, top_depth_quantile=0.15, open_axis='y', final_motion='linear',
                 linear_vel_mps=0.04, linear_acc_mps2=0.25, j5_margin_deg=5.0,
                 pregrasp_offset_m=0.05, grasp_offset_m=0.015,
                 grasp_vel_dps=10.0, wait_before_grip_s=1.0,
@@ -450,8 +450,10 @@ def main(argv=None):
                 results = model.predict(color, verbose=False, device=g['device'],
                                         conf=g['conf'], iou=g['iou'])
                 grasps = []
+                # 竖直下抓取物体区域里最近的一小撮深度=顶面：透明物体/托盘的红外穿透读数偏远，被自然排除
+                quantile = g['top_depth_quantile'] if g['approach'] == 'top_down' else g['depth_quantile']
                 for name, conf, _box, rect, contour in detections(results, color.shape, classes):
-                    grasp = grasp_camera(rect, depth_mm, k, g['depth_quantile'], contour) if contour is not None else None
+                    grasp = grasp_camera(rect, depth_mm, k, quantile, contour) if contour is not None else None
                     grasps.append((conf, name, rect, grasp))
                     draw(color, name, conf, rect, grasp, grasp is not None)
                 valid = [item for item in grasps if item[3] is not None]
@@ -489,7 +491,7 @@ def main(argv=None):
                         log('Short side is not horizontal enough for a top-down grasp; '
                             'select again or use grasp.approach: camera_ray')
                         continue
-                    # 检测点在物体朝相机的表面上；竖直下抓时目标降到物体中线高度（下沉半个爪宽）
+                    # 检测点 = 物体顶面（近端深度分位）；目标降到物体中线高度（下沉半个爪宽）
                     object_pos = object_pos - np.array([0.0, 0.0, grasp['jaw_m'] / 2])
                 else:
                     nominal = tcp_rotation(grasp, t_base_camera, g['open_axis'])
