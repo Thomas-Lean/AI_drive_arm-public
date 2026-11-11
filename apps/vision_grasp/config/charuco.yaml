@@ -119,7 +119,7 @@ output:                      # --- 产出（写入标定根目录，不是本配
 
 grasp:                       # --- YOLO 抓取（grasp_yolo / yolo_detect 使用） ---
   model: models/yoloe-26s-seg.pt   # 相对路径=标定根目录下；开放词表+分割
-  device: cpu
+  device: cuda:0
   conf: 0.25                 # 开放词表分数偏低：球 ~0.85、瓶 ~0.48（0.5 会滤掉瓶子）
   iou: 0.45
   classes: ["squeeze ball", "stress ball", "water bottle", "bottle"]
