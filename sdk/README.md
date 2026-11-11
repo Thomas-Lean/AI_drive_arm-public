@@ -81,7 +81,7 @@ quat 顺序 [w, x, y, z]。夹爪是金属指间距 4–70 mm（J6 舵机角 −
 | 锁住 | `python3 -m d1t_sdk lock` | 锁在当前姿态 |
 | 软急停 | `python3 -m d1t_sdk estop` | 之后必须 `reset` 才能再动 |
 | 复位 | `python3 -m d1t_sdk reset` | 清软急停 / 故障 |
-| 回折叠位 | `python3 -m d1t_sdk park` | 夹爪判定→腕部回零→大小臂一起收回→停 0.5 s 全轴失力，打印「已到折叠位并已失力，可以下电」；夹爪夹着东西时报错不动 |
+| 回折叠位 | `python3 -m d1t_sdk park` | 先 `gripper 70` 张开夹爪；夹爪未张开时报错不动。腕部回零→大小臂一起收回→停 0.5 s 全轴失力，打印「已到折叠位并已失力，可以下电」 |
 
 无参数指令（state、ping、home、park、free、lock、estop、reset）不接受任何参数。
 指令缺失 / 未知、参数个数不对、数值不能解析（如 `joint 1,2,x`）、逗号分隔的个数不对、nan/inf：
@@ -102,7 +102,7 @@ stderr 打一行 `失败：原因` 再打一行用法，退出码 2，不连臂�
 | 夹爪 | `arm.gripper(45)` | `mm` ∈ [4, 70]，超出报错不动；`vel_dps` ∈ (0, 20] °/s、默认 20，超出报错；`grip_power_mw` 只支持 0 |
 | 失力 / 锁住 | `arm.free_all()` / `arm.lock_all()` | free 后**臂会掉** |
 | 软急停 / 复位 | `arm.estop()` / `arm.reset()` | estop 后必须 reset |
-| 回折叠位 | `arm.park()` | `vel_dps` ∈ (0, 100] °/s、默认 20；`async_` 只支持 False；夹爪判定（J6 电流 < 40 mA 且命令与反馈差 ≤ 3 mm 才算空，空则张到 70 mm，否则抛错不动）→腕部回零→大小臂一起收回，每段到位误差 ≤ 3° 才走下一段；最后停 0.5 s 全轴失力 |
+| 回折叠位 | `arm.park()` | `vel_dps` ∈ (0, 100] °/s、默认 20；`async_` 只支持 False；夹爪须已张开（开口 ≥ 65 mm，否则抛错不动；park 不替你张夹爪）→腕部回零→大小臂一起收回，每段到位误差 ≤ 3° 才走下一段；最后停 0.5 s 全轴失力 |
 | 正解 | `arm.fk([0, -40, 60, 0, 30, 0])["pos"]` | 6 个 URDF 角（不查限位）；返回 `pos`(m)、`quat`、`rpy`(rad) |
 | 逆解 | `arm.ik([0.30, 0, 0.38], rpy=[0, 0, 0])` | 返回 6 个 URDF 角；无解抛 `D1ArmError`；`seed` 可给初值（恰好 6 个 URDF 角） |
 | 走到位姿（关节插值） | `arm.move_j([0.30, 0, 0.38], rpy=[0, 0, 0])` | 先逆解一次再按关节走；速度参数同 move_joints |
@@ -145,7 +145,7 @@ stderr 打一行 `失败：原因` 再打一行用法，退出码 2，不连臂�
 | `ping()` | 7 舵机在线 → `list[bool]`（valid_mask） | 同上 |
 | `move_joints(q_deg, vel_dps=80, acc_dps2=500, async_=False)` | 关节五次多项式点到点；`vel_dps` ∈ (0, 100] °/s、`acc_dps2` > 0，超出报错 | 走完才返回 |
 | `home(duration_s=6.0, async_=False)` | 回 URDF 全零位（d1arm_sdk 语义；**非原厂 HOME**），duration_s（≥ 0.5 s）走完 | 走完才返回 |
-| `park(vel_dps=20.0, async_=False)` | 慢速回折叠位（原厂 HOME 姿势，J1/J2 留限位余量）后失力，供下电收臂：夹爪判定（J6 电流 < 40 mA 且命令与反馈差 ≤ 3 mm 判空 → 张到 70 mm；否则抛 `D1ArmError`，一轴不动）→腕部回零（J3–J5 → 0，J0–J2 保持命令角）→大小臂一起收回（J0–J2 同步到折叠位）→停 0.5 s `free_all()`；每段到位误差 ≤3° 才走下一段，超差/故障即停且不失力；已在折叠位时只做夹爪判定和失力；`vel_dps` ∈ (0, 100] °/s；`async_` 只支持 False（分段校验须逐段确认） | 走完才返回 |
+| `park(vel_dps=20.0, async_=False)` | 慢速回折叠位（原厂 HOME 姿势，J1/J2 留限位余量）后失力，供下电收臂：夹爪检查（开口 < 65 mm 即未张开 → 抛 `D1ArmError`，一轴不动；确认没夹东西后自行 `gripper(70)`）→腕部回零（J3–J5 → 0，J0–J2 保持命令角）→大小臂一起收回（J0–J2 同步到折叠位）→停 0.5 s `free_all()`；每段到位误差 ≤3° 才走下一段，超差/故障即停且不失力；已在折叠位时只做夹爪检查和失力；`vel_dps` ∈ (0, 100] °/s；`async_` 只支持 False（分段校验须逐段确认） | 走完才返回 |
 | `wait_idle(timeout=30)` | 等运动结束且控制器不在运动（IDLE/HOLD/RELEASED/ESTOP/FAULT）→ bool；`timeout` > 0 s | — |
 | `gripper(mm, vel_dps=20, grip_power_mw=0, async_=False)` | J6 走到夹爪标定表角（`arm_model/d1t.json`），mm ∈ [4, 70]、`vel_dps` ∈ (0, 20] °/s，超出抛 `D1ArmError`；`grip_power_mw` 只支持 0（舵机自保护兜底），传别的值报错 | 走完才返回 |
 | `free_all()` | 全轴 RELEASE，**臂会掉，先托住** | 确认 RELEASED |
@@ -217,8 +217,8 @@ ArmState 会提示查 CYCLONEDDS_URI/ParticipantIndex。
 5. 夹持力暂用舵机自保护（grip_power_mw=0）+ 温度守卫（45 ℃ 降出力、50 ℃ 释放，
    控制器内置）。
 6. 中止流式/轨迹：Ctrl-C 或 `close()`，看门狗约 0.3 s 停臂。
-7. **park 夹爪判定的已知限制**：若夹持方式是「夹到后把目标锁在停住角」（此时电流约 14–21 mA、命令 = 反馈），park 会误判为空并张开夹爪——这种用法下先手动松开/取下物体再 park。
-8. **两条命令衔接处的小幅下沉**：每条运动命令结束后控制器切到舵机保持锁力，下一条命令开始时舵机切回位置模式，负载轴（J1/J2）会先下沉约 0.3–1° 再执行，属舵机死区行为，目标值不受影响、不累积。
+7. **park 前先张开夹爪**：夹爪夹物时，若目标贴着物体的停住位置，电流和位置读数与空夹无法区分，SDK 判断不了有没有夹东西。所以 park 只在夹爪已张开时执行，是否有物由人确认后用 `gripper 70` 张开。
+8. **两条命令衔接处的小幅下沉**：上一条运动命令结束、下一条开始时，负载轴（J1/J2）在起转前会先下沉约 0.5° 再跟上轨迹，不影响目标值、不累积。流式控制（`stream_joints` / `stream_pose`，连续发送不切换保持）不受影响。
 
 ## 离线测试
 
