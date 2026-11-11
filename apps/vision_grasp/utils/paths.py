@@ -5,7 +5,7 @@ from pathlib import Path
 def data_root(config_path):
     """数据根目录 = 配置所在目录（config/）。
     hand_eye.npz、sessions/、示教文件与配置同目录存放。"""
-    return Path(config_path).parent
+    return Path(config_path).resolve().parent
 
 
 def resolve_model(value, config_path):
@@ -14,7 +14,7 @@ def resolve_model(value, config_path):
     path = Path(str(value))
     if path.is_absolute():
         return path
-    return Path(config_path).parent.parent / path
+    return Path(config_path).resolve().parent.parent / path
 
 
 def ensure_text_encoder(config_path):
@@ -26,7 +26,7 @@ def ensure_text_encoder(config_path):
     仓库根没有则返回 None（首次 set_classes 会自动下载到 CWD，
     之后建议挪到仓库根）。
     """
-    target = Path(config_path).parents[2] / 'mobileclip2_b.ts'
+    target = Path(config_path).resolve().parents[2] / 'mobileclip2_b.ts'
     link = Path.cwd() / 'mobileclip2_b.ts'
     if not target.is_file():
         return None

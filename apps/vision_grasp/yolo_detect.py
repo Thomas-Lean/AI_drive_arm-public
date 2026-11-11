@@ -84,7 +84,10 @@ def main(argv=None):
     # Optional base-frame overlay: hand-eye result + live robot state.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     t_tcp_camera, arm = None, None
-    result_path = data_root(args.config) / (cfg.get('output') or {}).get('filename', 'hand_eye.npz')
+    name = (cfg.get('output') or {}).get('filename', 'hand_eye.npz')
+    if (cfg.get('board') or {}).get('kind', 'aruco') == 'charuco' and 'charuco' not in name:
+        name = name[:-len('.npz')] + '_charuco.npz'  # 与 handeye.load_config 同规则：板型入文件名
+    result_path = data_root(args.config) / name
     if result_path.is_file():
         with np.load(result_path, allow_pickle=False) as result:
             t_tcp_camera = result['T_tcp_camera'].copy()
