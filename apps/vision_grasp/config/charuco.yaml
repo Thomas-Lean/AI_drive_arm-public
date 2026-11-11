@@ -128,6 +128,7 @@ grasp:                       # --- YOLO 抓取（grasp_yolo / yolo_detect 使用
                              # 注意：yoloe 下清空此表 => 不做 set_classes => 零检测！
   depth_quantile: 0.5        # 抓取点深度分位（0.5≈物心，reBot 出厂值）
   top_depth_quantile: 0.15   # top_down 用：取物体区域最近 15% 深度当顶面（透明瓶/托盘红外穿透会读远）
+  support_z_m: 0.0          # top_down 用：物体所在支撑面在基座系的高度（底座与桌面同面=0）；中线不低于它+半爪宽
   approach: top_down         # top_down=竖直向下进给、爪夹物体水平短边（躺放物体）；camera_ray=沿相机视线进给
   open_axis: "y"             # 爪开合轴在 SDK TCP 系的方向：y 或 z（首抓 90° 错位则换）
   final_motion: "linear"     # 末段及原路退出：linear=move_l；joint=关节插补

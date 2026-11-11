@@ -692,6 +692,13 @@ class CalibrationTests(unittest.TestCase):
         t_base_camera[:3,:3]=np.eye(3)
         self.assertIsNone(gy.top_down_rotation(dict(open_axis=np.array([0,0,1.0])),t_base_camera))
 
+    def test_top_down_target_floor(self):
+        import grasp_yolo as gy
+        pos,floored=gy.top_down_target(np.array([0.3,0.0,0.027]),0.048,0.0)  # 透明瓶顶面读低
+        self.assertTrue(floored); self.assertAlmostEqual(pos[2],0.024)
+        pos,floored=gy.top_down_target(np.array([0.3,0.0,0.080]),0.048,0.0)  # 垫高的瓶子按顶面
+        self.assertFalse(floored); self.assertAlmostEqual(pos[2],0.056)
+
     def test_resolve_device(self):
         from utils.device import resolve_device
         self.assertEqual(resolve_device('cpu'),'cpu')

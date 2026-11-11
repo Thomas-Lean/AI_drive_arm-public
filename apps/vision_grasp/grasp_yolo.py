@@ -28,7 +28,7 @@ from utils.paths import data_root, ensure_text_encoder, resolve_model  # noqa: E
 
 WINDOW = 'YOLO grasp  g:freeze+grasp  q:open+safe+quit'
 DEFAULTS = dict(conf=0.5, iou=0.45, device='auto', approach='camera_ray', classes=[],
-                depth_quantile=0.5, top_depth_quantile=0.15, open_axis='y', final_motion='linear',
+                depth_quantile=0.5, top_depth_quantile=0.15, support_z_m=0.0, open_axis='y', final_motion='linear',
                 linear_vel_mps=0.04, linear_acc_mps2=0.25, j5_margin_deg=5.0,
                 pregrasp_offset_m=0.05, grasp_offset_m=0.015,
                 grasp_vel_dps=10.0, wait_before_grip_s=1.0,
@@ -123,6 +123,17 @@ def top_down_rotation(grasp, t_base_camera, open_axis='y'):
     if norm < 0.2:
         return None
     return _tcp_frame(np.array([0.0, 0.0, -1.0]), open_3d / norm, open_axis)
+
+
+def top_down_target(object_pos, jaw_m, support_z):
+    """竖直下抓的目标点：物体中线高度 = max(顶面 − 半爪宽, 支撑面 + 半爪宽)。
+    顶面来自深度，透明物体会读低；躺放物体的中线不可能低于「支撑面 + 半径」，取两者较高者防止压桌。
+    返回 (目标点, 是否被支撑面兜底)。"""
+    from_top = float(object_pos[2]) - jaw_m / 2
+    floor = float(support_z) + jaw_m / 2
+    out = np.array(object_pos, float)
+    out[2] = max(from_top, floor)
+    return out, floor > from_top
 
 
 def _tcp_frame(into, open_3d, open_axis):
@@ -491,8 +502,11 @@ def main(argv=None):
                         log('Short side is not horizontal enough for a top-down grasp; '
                             'select again or use grasp.approach: camera_ray')
                         continue
-                    # 检测点 = 物体顶面（近端深度分位）；目标降到物体中线高度（下沉半个爪宽）
-                    object_pos = object_pos - np.array([0.0, 0.0, grasp['jaw_m'] / 2])
+                    # 检测点 = 物体顶面（近端深度分位）；目标降到物体中线高度，且不低于支撑面 + 半爪宽
+                    object_pos, floored = top_down_target(object_pos, grasp['jaw_m'], g['support_z_m'])
+                    if floored:
+                        log(f'Depth top looks too low (transparent object?); grasp height '
+                            f'raised to support_z_m + jaw/2 = {object_pos[2]:.3f} m')
                 else:
                     nominal = tcp_rotation(grasp, t_base_camera, g['open_axis'])
                 plan = plan_grasp(arm, object_pos, nominal, q_meas, g)
