@@ -14,7 +14,7 @@ namespace cfg {
 
 // ---------------- 版本 ----------------
 
-constexpr const char* kCtrlVersion = "0.1.0";  // 发布版本，与根 CHANGELOG.md 对应；启动日志打印
+constexpr const char* kCtrlVersion = "0.1.3";  // 发布版本，与根 CHANGELOG.md 对应；启动日志打印
 
 // ---------------- 总线与舵机 ----------------
 

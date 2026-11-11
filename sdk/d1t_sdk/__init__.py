@@ -15,7 +15,7 @@ from ._kinematics import IkParams, Kinematics
 from ._trajectory import plan_arc, plan_joint_move, plan_line
 from .d1arm import D1Arm
 
-__version__ = "0.1.0"
+__version__ = "0.1.3"
 
 __all__ = ["D1Arm", "D1ArmError", "Kinematics", "IkParams",
            "plan_joint_move", "plan_line", "plan_arc", "__version__"]

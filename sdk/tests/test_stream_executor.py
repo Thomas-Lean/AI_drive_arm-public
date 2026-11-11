@@ -41,7 +41,7 @@ class FakeCtrl:
             frames.append(ArmState_(
                 seq=seq, stamp_ns=time.time_ns(), sample_span_us=15300,
                 ctrl_state=cs, cmd_seq_ack=0, cmd_stamp_ns=0, cmd_rx_ns=0,
-                valid_mask=0x7F, q=[float(x) for x in q], q_target=[0.0] * 7,
+                valid_mask=0x7F, q=[float(x) for x in q], q_target=[float(x) for x in q],  # 假定在原位保持
                 current_ma=[10] * 7, voltage_mv=[12000] * 7, temp_c=[27.0] * 7,
                 status=[0] * 7, turns=[0] * 7, fault=0, warn=0, overruns=0))
         return frames
@@ -306,12 +306,13 @@ class TestStreamExecutor(unittest.TestCase):
         finally:
             arm.close()
 
-    def test_speed_clamped_to_controller_limit(self):
-        """vel_dps 超过所有轴上限，请求 J0 走 90° → 实际下发相邻命令差 ≤ 臂模型限速×0.05s+余量。"""
+    def test_speed_at_controller_limit(self):
+        """vel_dps 取上限（各轴限速），请求 J0 走 90° → 实际下发相邻命令差 ≤ 臂模型限速×0.05s+余量。
+        （超过上限的 vel_dps 现在报错，见 test_param_validation.py）"""
         fc = FakeCtrl()
         arm, em = make_arm(fc)
         try:
-            vel = max(AXIS_SPEED_DPS) * 2  # 必然触发逐轴钳制
+            vel = min(AXIS_SPEED_DPS[:6])  # 用户可给的最大值
             arm.move_joints([90, -90, 89, 0, 0, 0], vel_dps=vel, acc_dps2=500)
             streams = fc.stream_cmds()
             # 逐轴检查相邻命令角速度（首尾段五次多项式慢、中段最快）

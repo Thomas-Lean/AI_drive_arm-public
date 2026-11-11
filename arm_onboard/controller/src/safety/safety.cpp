@@ -620,7 +620,9 @@ void Core::commit(Decision& d, const std::vector<OpResult>& res, int64_t now) {
         if (r == OpResult::OK) {
           tx_pending_[o.axis] = false;
           if (o.mode == kHold) {
-            bus_tgt_[o.axis] = o.q_meas;
+            // 保持目标沿用上次写成功的命令角；只有从未下令 / 失力后（NaN）才取实测角。
+            // 用实测角会把重力下沉写进 q_target，下一个 SDK 进程据此保持 → 臂逐次下掉（F76 跨进程版）
+            if (!std::isfinite(bus_tgt_[o.axis])) bus_tgt_[o.axis] = o.q_meas;
             if (!conf_[o.axis].active) conf_[o.axis] = Confirm{true, now, 0};
           } else {
             bus_tgt_[o.axis] = nan;
