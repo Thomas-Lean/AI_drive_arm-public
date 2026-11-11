@@ -12,7 +12,7 @@ board:                       # --- 标记板（单 ArUco，或 ChArUco 棋盘做
   type: aruco_single
   dictionary: DICT_4X4_50    # 两种板共用的 ArUco 字典
   marker_id: 0               # 单 ArUco 用的标记 ID（charuco 忽略）
-  marker_length_m: 0.100     # 单 ArUco：黑框外沿实测边长（不含白边！打印会缩放，务必实测）；
+  marker_length_m: 0.098     # 单 ArUco：黑框外沿实测边长（不含白边！打印会缩放，务必实测）；
                              #   charuco：marker 边长 —— 切 kind 时同一键要跟着改！
   border_bits: 1             # 标记边框位宽
   min_side_px: 60            # 单 ArUco：图中标记最小边长，过小拒绝
@@ -31,8 +31,8 @@ robot:                       # --- 机械臂（d1t_sdk.D1Arm，DDS 直连 d1t_ar
   port: 1                    # 占位，同上
   request_timeout_s: 5.0     # 等一帧 ArmState 的超时
   move_timeout_s: 45.0       # 单次运动到位超时
-  vel_dps: 30.0              # 采集点之间的关节速度（°/s；控制器逐轴限速 100°/s）
-  acc_dps2: 50.0             # 关节加速度（°/s²）
+  vel_dps: 90.0              # 采集点之间的关节速度（°/s；控制器逐轴限速 100°/s）
+  acc_dps2: 100.0             # 关节加速度（°/s²）
   approach_vel_dps: 20.0     # ready/safe 姿态的低速接近速度（°/s）
   offline_grace_s: 5.0       # 瞬时舵机掉线容忍窗：超窗才判故障；7/7 掉线立即判故障。
                              #   本控制器偶发缺回包沿用上次值、连续 200 ms 才判故障，

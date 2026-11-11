@@ -191,6 +191,7 @@ class CalibrationTests(unittest.TestCase):
         b = copy.deepcopy(self.cfg['board'])
         # A planar frontal marker is intentionally ambiguous; test decode/PnP with gap disabled.
         b['min_pnp_error_gap_px'] = 0
+        b['marker_length_m'] = 0.100  # 合成图按 0.1 m 标记推算距离，不随实测配置值变
         marker = cv2.aruco.generateImageMarker(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50),0,300)
         image = np.full((480,640),255,np.uint8)
         image[80:380,170:470] = marker

@@ -8,3 +8,4 @@ config/sessions/
 config/*.npz
 config/*.tmp
 config/teach_poses_*.yaml
+config/*.bak-*

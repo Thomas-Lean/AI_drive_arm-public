@@ -23,6 +23,7 @@ apps/vision_grasp/
 ├── yolo_detect.py        # 入口：YOLO 检测预览（基座系/相机系坐标，纯检测）
 ├── config/
 │   ├── default.yaml      # 全部配置（标定+抓取，含中文注释）
+│   ├── charuco.yaml      # 同上，板型为 ChArUco（产出 hand_eye_charuco.npz）；两板手眼解不一致时以此为准，抓取用 --config config/charuco.yaml
 │   ├── hand_eye.npz      # 标定产出（合格才覆盖；抓取端读取；不入库）
 │   └── sessions/         # 每次采集留档（图像/关节/样本 npz/attempts.json；不入库）
 ├── models/               # YOLO 权重目录（不随仓库发布，下载见 models/README.md）
