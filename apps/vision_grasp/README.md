@@ -33,7 +33,7 @@ apps/vision_grasp/
 │   └── paths.py          #   路径解析（配置在 config/，数据落根目录）
 ├── scripts/              # 工具脚本
 │   ├── live_view.py      #   纯取景器（不连机器人）
-│   ├── teach_poses.py    #   拖动示教（**本平台不支持**，见「已知限制」）
+│   ├── teach_poses.py    #   拖动示教：失力拖动 → 锁住记录，点位直接写回配置 poses_deg
 │   ├── dryrun.py         #   点位运动学 dry-run（对 --sim 实例，FK 多样性判定）
 │   ├── pose_test.py      #   点位运动彩排（真机逐点停留，输出保持漂移）
 │   └── fk_compare.py     #   FK 与 d1arm_sdk 金标值逐项比对（离线可重跑）
@@ -106,7 +106,7 @@ yoloe 注意：`set_classes` 需要 clip 包 + ~240 MB 文本编码器
 | `call('move_l')` | 1 | `D1Arm.move_l(pos, quat, vel, acc, async_=True)` | 位姿表示一致（quat 优先、米、m/s、m/s²）；上层随后 `wait_still(expected_q)` 轮询确认，适配层照常支持 |
 | `call('gripper')` | 3 | `D1Arm.gripper(mm)` | mm 语义同为金属指间距；本项目可达域 4–70 mm（实测标定表）⊇ 原 0–65 mm；J6 限速 ≤20°/s 相同 |
 | `call('estop')` | 6 | `D1Arm.estop()` | **差异已处理**：本项目急停锁存至 `reset()`，原为下一条轨迹自动清 → 适配层只自动清**本进程自己发的** estop（下一条运动命令前 reset）；外部 estop 与任何 FAULT 拒绝运动并抛错（消息带 mode/fault 位），确认安全后手动 `python3 -m d1t_sdk reset` |
-| `call('damping')` / `call('set_joint')` | 3 | **无对应** | 仅 `scripts/teach_poses.py` 拖动示教用；本项目 `free_all` 是整臂失力（臂会掉），不许顶替 → 适配层显式拒绝，teach_poses 标记不支持（见「已知限制」），点位改为手填关节角 |
+| `call('damping')` / `call('set_joint')` | 3 | **无对应** | 原工程拖动示教用；本项目改为 `call('free')`（`free_all` 整臂失力）+ `call('lock')`（`lock_all` 锁在当前实测角），见「已知限制」#1 |
 
 ## 怎么跑
 
@@ -142,7 +142,7 @@ YOLO 抓取（grasp_yolo.py，先 `--dry-run`）。每步一条命令、一条�
 
 | # | 限制 | 说明 |
 |---|---|---|
-| 1 | 拖动示教不支持 | 原工程的 `damping`/`set_joint` 在 d1t_sdk 无对应（`free_all` 是整臂失力、臂会掉，不许顶替）；`scripts/teach_poses.py` 运行会立即报不支持，采集点位手填关节角（注意 J2 ≤ 89°） |
+| 1 | 拖动示教为整臂失力 | d1t_sdk 没有单轴阻尼，`scripts/teach_poses.py` 用整臂失力拖动、锁住后记录：**失力期间臂会掉，全程托住小臂**。用法：`python3 scripts/teach_poses.py --config config/<配置>.yaml [--n 32]`；回车依次 = 走准备位 → 失力 → 锁住并记录 → 失力 …，`u` 删上一个点，`q` 结束；超软限位的点不记；每记一点写回配置 `poses_deg`（启动时备份 `<配置>.bak-时间`）；任何退出都先锁住 |
 | 2 | estop 锁存语义差异 | 本项目急停锁存到 `reset()`（原工程下一条轨迹自动清）。适配层**只自动清本进程自己发的** estop；**外部** estop（别的终端/进程敲的）与任何 FAULT 都不自动清——运动命令抛错并带 fault 位，确认安全后手动 `python3 -m d1t_sdk reset`。脚本因 Ctrl-C/故障退出后重跑前，先 `python3 -m d1t_sdk state` 看一眼有无锁存 |
 | 3 | FK/IK 绝对精度 ±1 cm 量级 | 零位偏移未精标 + 重力下沉约 1 cm（SDK 不补偿，见仓库主 README 已知限制 #4/#7）。标定与抓取全用实测角与相对变换，不受累积影响，但 `min_base_z_m` 等余量按此留 |
 | 4 | J4≈90° 保持自激 | 手腕水平伸出保持会自激抖动触发 HOLD_FAIL（`reset()` 可恢复）；采集点位与预抓取姿态避开（仓库主 README #5） |

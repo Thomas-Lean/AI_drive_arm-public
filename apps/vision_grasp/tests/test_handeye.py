@@ -354,6 +354,17 @@ class CalibrationTests(unittest.TestCase):
                 arm.call(command, id=0, power=500)
         self.assertFalse(arm.broken)
 
+    def test_rpc_free_lock_passthrough(self):
+        class Fake:
+            def __init__(self): self.calls=[]
+            def free_all(self): self.calls.append('free')
+            def lock_all(self): self.calls.append('lock')
+            def close(self): pass
+        fake=Fake()
+        arm=app.RpcArm(self.cfg['robot'], arm=fake)
+        arm.call('free'); arm.call('lock')
+        self.assertEqual(fake.calls,['free','lock'])
+
     def test_offline_grace_window(self):
         arm=object.__new__(app.RpcArm)
         arm.cfg=dict(self.cfg['robot'],offline_grace_s=2.0)  # Fixed window; yaml value may differ.
@@ -618,23 +629,26 @@ class CalibrationTests(unittest.TestCase):
     def test_teach_poses_capture_and_hold(self):
         import scripts.teach_poses as teach
         class Arm:
-            def __init__(self,_): self.cmds=[]
+            def __init__(self,_): self.cmds=[]; self.moves=[]
             def call(self,cmd,**kw):
-                self.cmds.append((cmd,kw))
+                self.cmds.append(cmd)
                 if cmd=='state':
-                    return dict(state=dict(q_deg=[1.5,-40.2,40.1,0.0,30.0,0.0],online=[True]*7))
+                    return dict(state=dict(q_deg=[1.5,-40.2,40.1,0.0,30.0,0.0],online=[True]*7,
+                                           servo_raw_deg=[0.0]*7))
                 return dict(ok=True)
+            def move(self,pose,vel=None): self.moves.append((list(pose),vel))
             def close(self): pass
         class CameraT:
             def __init__(self,_): pass
             def frame(self): return np.zeros((4,6,3),np.uint8),{}
             def close(self): pass
-        lines=iter(['c','f','c','q'])
+        # ready, free, lock+record, free, lock+record, u(undo), free, lock+record, q
+        lines=iter(['','','','','','u','','','q'])
         class Stdin:
             def readline(self): return next(lines)
-        with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()) as out:
-            config=Path(td)/'default.yaml'
-            config.write_text(yaml.safe_dump(self.cfg),encoding='utf-8')
+        with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
+            config=Path(td)/'charuco.yaml'
+            config.write_text(yaml.safe_dump(self.cfg,default_flow_style=None),encoding='utf-8')
             arm=Arm(None)
             with patch.object(teach,'RpcArm',return_value=arm),patch.object(teach,'Camera',CameraT),\
                  patch.object(teach.sys,'stdin',Stdin()),\
@@ -643,17 +657,21 @@ class CalibrationTests(unittest.TestCase):
                  patch.object(teach.cv2,'waitKey',return_value=-1),\
                  patch.object(teach.cv2,'destroyAllWindows'),patch.object(teach.time,'sleep'):
                 self.assertEqual(teach.main(['--config',str(config)]),0)
-            taught=list(Path(td).glob('teach_poses_*.yaml'))
-            self.assertEqual(len(taught),1)
-            text=taught[0].read_text(encoding='utf-8')
-            self.assertIn('poses_deg:',text)
-            self.assertEqual(text.count('  - [1.50, -40.20'),2)
-            setj=[kw for cmd,kw in arm.cmds if cmd=='set_joint']
-            self.assertEqual(len(setj),12)  # two captures x six joints
-            self.assertEqual(setj[0]['id'],0)
-            self.assertEqual(setj[0]['interval_ms'],200)
-            self.assertEqual(len([1 for cmd,_ in arm.cmds if cmd=='damping']),2)  # start + one 'f'
-            self.assertIn('Hold engaged',out.getvalue())
+            self.assertEqual(arm.moves,[(self.cfg['robot']['ready_pose_deg'],
+                                         self.cfg['robot']['approach_vel_dps'])])
+            self.assertEqual(arm.cmds[0],'lock')   # 启动先锁住
+            self.assertEqual(arm.cmds[-1],'lock')  # 退出必锁住
+            self.assertEqual(arm.cmds.count('free'),3)
+            saved=yaml.safe_load(config.read_text(encoding='utf-8'))
+            self.assertEqual(saved['robot']['poses_deg'],[[1.5,-40.2,40.1,0.0,30.0,0.0]]*2)  # 3 记 1 删
+            self.assertEqual(len(list(Path(td).glob('charuco.yaml.bak-*'))),1)
+            self.assertEqual(len(list(Path(td).glob('teach_poses_*.yaml'))),1)
+
+    def test_teach_poses_rejects_out_of_limit(self):
+        import scripts.teach_poses as teach
+        self.assertEqual(teach.out_of_limits([0.0]*6),[])
+        self.assertEqual(teach.out_of_limits([0.0,0.0,500.0,0.0,0.0,0.0]),[2])
+        self.assertEqual(teach.out_of_limits(None),[])
 
     def test_paths_and_text_encoder_link(self):
         from utils import paths

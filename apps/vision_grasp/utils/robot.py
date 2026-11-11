@@ -12,8 +12,8 @@
   手动 `python3 -m d1t_sdk reset`——绝不悄悄放行别人按下的急停或未读的故障。
 - 链路彻底断开时本进程未必还能补发急停（DDS 同进程重复建 participant 会撞端口），
   兜底是臂载控制器看门狗：停止发送约 0.3 s 后自行停臂。
-- 'damping'/'set_joint'（拖动示教）无对应接口：d1t_sdk 的 free_all 是整臂失力
-  （臂会掉），不许顶替，显式拒绝（见 README 已知限制）。
+- 拖动示教用 'free'（free_all 整臂失力，臂会掉）+ 'lock'（lock_all 锁在当前实测角），
+  见 scripts/teach_poses.py；原工程的 'damping'/'set_joint' 无对应接口，显式拒绝。
 """
 from datetime import datetime
 import sys
@@ -171,11 +171,16 @@ class RpcArm:
             self.arm.estop()
             self.self_estop = True  # 自己发的急停才允许下一条运动前自动清
             return {'ok': True}
+        if command == 'free':  # 拖动示教：整臂失力（臂会掉，调用方负责先托住）
+            self.arm.free_all()
+            return {'ok': True}
+        if command == 'lock':  # 全轴 HOLD，目标取当前实测角（失力拖完锁住不会弹回）
+            self.arm.lock_all()
+            return {'ok': True}
         if command in ('damping', 'set_joint'):
             raise RobotFault(
-                f"'{command}' has no d1t_sdk counterpart: drag-teach "
-                '(scripts/teach_poses.py) is unsupported here; fill poses_deg '
-                'by hand instead (see README known limitations)')
+                f"'{command}' has no d1t_sdk counterpart; drag-teach uses "
+                "'free' + 'lock' (see scripts/teach_poses.py)")
         raise RobotFault(f'unsupported command: {command}')
 
     def state(self):
