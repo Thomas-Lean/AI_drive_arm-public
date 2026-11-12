@@ -142,6 +142,7 @@ grasp:                       # --- YOLO 抓取（grasp_yolo / yolo_detect 使用
   gripper_close_factor: 0.7  # 只决定闭合到哪为止的上限（实测爪宽×系数）；
                              #   夹住后锁在停住角（close_and_lock），不顶着物体保持
   gripper_close_min_mm: 15.0 # 闭口下限（防测量偏小时对刚性物硬闭堵转）
-  grasp_offset_m: 0.015      # 到位深度微调：正值沿进给方向外退（治"到位太深"）
+  grasp_offset_m: 0.040      # TCP 沿进给方向停在抓取点外多远：SDK 的 TCP 在两指根部（d1t.json），指尖再伸出约 5.5 cm；
+                             #   0.040 = 指尖越过抓取点约 1.5 cm、指垫夹在物体中线。到位太深调大，太浅调小
   min_base_z_m: 0.02         # 目标基座系 z 下限=工作面高度+余量（防砸台面）
                              #   底座与桌面同面时物体天然在 z 0~4cm，勿设过高
