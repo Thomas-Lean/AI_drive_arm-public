@@ -221,6 +221,7 @@ class RpcArm:
         stable_tolerance_deg）；降级遥测不接受为"已稳定"。"""
         deadline = time.monotonic()+self.cfg['move_timeout_s']
         window = []
+        s = q = None
         while time.monotonic() < deadline:
             s = self.state()
             q = np.asarray(s['q_deg'], float)
@@ -234,7 +235,15 @@ class RpcArm:
             else:
                 window = []
             time.sleep(self.cfg['poll_s'])
-        raise RobotFault('Motion/settling timeout; no automatic safe-pose move will follow')
+        detail = ''
+        if q is not None:
+            detail = f"; mode={s.get('mode')} q={np.round(q, 1).tolist()}"
+            if target is not None:
+                err = np.abs(q - np.asarray(target, float))
+                detail += (f" target={np.round(np.asarray(target, float), 1).tolist()} "
+                           f"max error J{int(np.argmax(err))}={float(err.max()):.1f} deg "
+                           f"(tolerance {self.cfg['arrival_tolerance_deg']})")
+        raise RobotFault('Motion/settling timeout; no automatic safe-pose move will follow' + detail)
 
     def move(self, pose, vel=None):
         """关节运动：默认用配置的 vel_dps/acc_dps2，可用 vel 覆盖速度
