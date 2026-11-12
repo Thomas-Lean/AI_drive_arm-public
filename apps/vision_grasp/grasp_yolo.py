@@ -33,7 +33,7 @@ DEFAULTS = dict(conf=0.5, iou=0.45, device='auto', approach='camera_ray', classe
                 pregrasp_offset_m=0.05, grasp_offset_m=0.015,
                 grasp_vel_dps=10.0, wait_before_grip_s=1.0,
                 gripper_open_mm=65.0, gripper_close_factor=1.0,
-                gripper_close_min_mm=15.0, min_base_z_m=0.02)
+                gripper_close_min_mm=15.0, min_base_z_m=0.02, base_offset_m=(0.0, 0.0, 0.0))
 
 # 闭爪后锁停住角的判据（顶物体保持会堵转发热：实测目标比停住角多闭约 3°
 # 电流即超 300 mA、82 s 内 J6 从 40 ℃ 升到 45 ℃，20 mm 的差更甚）
@@ -417,6 +417,9 @@ def main(argv=None):
             raise ValueError(f'grasp.{key} must be finite and positive')
     if not 0 <= g['j5_margin_deg'] < 90:
         raise ValueError('grasp.j5_margin_deg must be in [0, 90)')
+    g['base_offset_m'] = np.asarray(g['base_offset_m'], dtype=float)
+    if g['base_offset_m'].shape != (3,) or not np.all(np.isfinite(g['base_offset_m'])):
+        raise ValueError('grasp.base_offset_m must be three finite numbers [dx, dy, dz] in metres')
     result_path = data_root(args.config) / cfg['output']['filename']
     with np.load(result_path, allow_pickle=False) as result:
         t_tcp_camera = result['T_tcp_camera'].copy()
@@ -534,6 +537,9 @@ def main(argv=None):
                             f'raised to support_z_m + jaw/2 = {object_pos[2]:.3f} m')
                 else:
                     nominal = tcp_rotation(grasp, t_base_camera, g['open_axis'])
+                if np.any(g['base_offset_m']):  # 复刻时的固定偏差补偿（基座系，米）
+                    object_pos = object_pos + g['base_offset_m']
+                    log(f"Applied base_offset_m {g['base_offset_m'].round(3).tolist()}")
                 plan = plan_grasp(arm, object_pos, nominal, q_meas, g)
                 if plan is None:
                     log('No feasible grasp for this frame; waiting for another selection')
