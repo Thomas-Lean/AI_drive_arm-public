@@ -80,6 +80,8 @@ def grasp_camera(rect, depth_mm, k, quantile, contour=None):
         pixels = np.column_stack((xs, ys)) - center
         long_dir = np.array([-direction[1], direction[0]])
         along = pixels @ long_dir
+        lo_end, hi_end = np.percentile(along, [2, 98])
+        ends_px = np.array([center + lo_end * long_dir, center + hi_end * long_dir])  # 长轴两端（像素）
         mid = np.median(along)
         band = np.abs(along - mid) <= np.clip(np.ptp(along) * 0.04, 2, 12)
         if band.sum() < 8:
@@ -105,7 +107,7 @@ def grasp_camera(rect, depth_mm, k, quantile, contour=None):
     jaw_m = float(np.linalg.norm([direction[0] * span_px * z / k[0, 0],
                                   direction[1] * span_px * z / k[1, 1]]))
     return dict(position=position, approach=approach, open_axis=open_axis,
-                jaw_m=jaw_m, line_vector=direction * span_px, center=(int(round(center[0])), int(round(center[1]))))
+                jaw_m=jaw_m, ends_px=ends_px if contour is not None else None, line_vector=direction * span_px, center=(int(round(center[0])), int(round(center[1]))))
 
 
 def tcp_rotation(grasp, t_base_camera, open_axis='y'):
@@ -134,6 +136,23 @@ def top_down_target(object_pos, jaw_m, support_z):
     out = np.array(object_pos, float)
     out[2] = max(from_top, floor)
     return out, floor > from_top
+
+
+def axis_midpoint_xy(ends_px, k, t_base_camera, z):
+    """物体长轴两端像素各沿视线与基座系水平面 z 求交，返回两交点中点的 (x, y)。
+    纠正透视：顺视线躺放的物体远端在图里被压短，二维中点会偏向近端。
+    视线不朝下（与平面无前向交点）时返回 None。"""
+    rotation, origin = t_base_camera[:3, :3], t_base_camera[:3, 3]
+    hits = []
+    for u, v in ends_px:
+        ray = rotation @ np.array([(u - k[0, 2]) / k[0, 0], (v - k[1, 2]) / k[1, 1], 1.0])
+        if abs(ray[2]) < 1e-9:
+            return None
+        scale = (z - origin[2]) / ray[2]
+        if scale <= 0:
+            return None
+        hits.append(origin + scale * ray)
+    return (hits[0][:2] + hits[1][:2]) / 2
 
 
 def _tcp_frame(into, open_3d, open_axis):
@@ -504,6 +523,12 @@ def main(argv=None):
                         continue
                     # 检测点 = 物体顶面（近端深度分位）；目标降到物体中线高度，且不低于支撑面 + 半爪宽
                     object_pos, floored = top_down_target(object_pos, grasp['jaw_m'], g['support_z_m'])
+                    if grasp.get('ends_px') is not None:
+                        mid = axis_midpoint_xy(grasp['ends_px'], k, t_base_camera, object_pos[2])
+                        if mid is not None:
+                            shift = np.linalg.norm(mid - object_pos[:2])
+                            object_pos[:2] = mid
+                            log(f'Grasp point moved {shift*100:.1f}cm to the 3D midpoint of the long axis')
                     if floored:
                         log(f'Depth top looks too low (transparent object?); grasp height '
                             f'raised to support_z_m + jaw/2 = {object_pos[2]:.3f} m')

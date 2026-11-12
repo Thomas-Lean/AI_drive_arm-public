@@ -699,6 +699,20 @@ class CalibrationTests(unittest.TestCase):
         pos,floored=gy.top_down_target(np.array([0.3,0.0,0.080]),0.048,0.0)  # 垫高的瓶子按顶面
         self.assertFalse(floored); self.assertAlmostEqual(pos[2],0.056)
 
+    def test_axis_midpoint_corrects_perspective(self):
+        import grasp_yolo as gy
+        k=np.array([[600.,0,320],[0,600.,240],[0,0,1.]])
+        # 相机在 (0,0,0.4) 斜向前下看；物体两端 (0.25,0,0.02)、(0.45,0,0.02)
+        z_cam=np.array([1.,0,-1.])/np.sqrt(2); x_cam=np.array([0,-1.,0]); y_cam=np.cross(z_cam,x_cam)
+        T=np.eye(4); T[:3,:3]=np.column_stack([x_cam,y_cam,z_cam]); T[:3,3]=[0,0,0.4]
+        def project(p):
+            c=T[:3,:3].T@(np.array(p)-T[:3,3]); return k[:2,:2]@(c[:2]/c[2])+k[:2,2]
+        ends=np.array([project([0.25,0,0.02]),project([0.45,0,0.02])])
+        np.testing.assert_allclose(gy.axis_midpoint_xy(ends,k,T,0.02),[0.35,0.0],atol=1e-9)
+        # 二维中点反投影会偏向近端
+        mid2d=ends.mean(0); naive=gy.axis_midpoint_xy(np.array([mid2d,mid2d]),k,T,0.02)
+        self.assertLess(naive[0],0.35-0.005)
+
     def test_resolve_device(self):
         from utils.device import resolve_device
         self.assertEqual(resolve_device('cpu'),'cpu')
