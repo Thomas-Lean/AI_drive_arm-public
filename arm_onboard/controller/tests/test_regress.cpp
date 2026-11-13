@@ -889,7 +889,7 @@ int main() {
   }
 
   // ===== TC-010 实机②：停住判据 = 窗口范围（静止读数抖动不误报，慢移仍报）=====
-  std::printf("== TC-010 停住判据（窗口 %d 采样，范围 ≤ %.1f°）\n", cfg::kStillWindow, cfg::kStillRangeDeg);
+  std::printf("== TC-010 停住判据（窗口 %d 采样，范围 ≤ %.1f°，J4 ≤ %.1f°）\n", cfg::kStillWindow, cfg::kStillRangeDeg, cfg::kStillRangeDegJ4);
   {  // 静止 + 读数抖动：按 A_readonly2 分布，J0/J1/J2/J5 每帧在 base 附近跳 −0.1 / 0 / +0.1 / +0.2（窗口范围 ≤ 0.3°）
     uint32_t lcg = 12345;
     auto rnd = [&lcg]() { lcg = lcg * 1103515245u + 12345u; return (lcg >> 16) & 0x7fff; };
@@ -933,6 +933,38 @@ int main() {
     }
     std::printf("   J0 %.0f °/s 慢移：重发 %d 次，HOLD_FAIL 于 %d ms\n", dps, resend, k_fail * 50 + 20);
     CHECK(resend == cfg::kHoldResendMax && k_fail > 0 && !released_arm(d));
+  }
+  {  // J4 放宽到 kStillRangeDegJ4（F91）：J4 自激抖 ±0.4°（窗口 0.8°）不报；J4 10 °/s 漂移仍报；J0 同样抖动照报
+    for (int axis : {4, 0}) {
+      Core c(P);
+      c.on_startup_done(false);
+      Cmd h = mk(Mode::HOLD, 1, 0);
+      S(c, &h, fb_at(Q0, 0), 0);
+      int fails = 0;
+      for (int k = 1; k <= 40; ++k) {
+        int64_t t = k * 50 * MS + 20 * MS;
+        auto q = Q0;
+        q[axis] += (k % 2) ? 0.4f : -0.4f;
+        Decision d = S(c, nullptr, fb_at(q, t), t);
+        fails += (d.fault & bits::HOLD_FAIL) ? 1 : 0;
+      }
+      std::printf("   J%d 自激抖动 0.8°：HOLD_FAIL %d\n", axis, fails);
+      CHECK(axis == 4 ? fails == 0 && !c.hold_confirm_active(4) : fails > 0);
+    }
+    Core c(P);
+    c.on_startup_done(false);
+    Cmd h = mk(Mode::HOLD, 1, 0);
+    S(c, &h, fb_at(Q0, 0), 0);
+    int k_fail = -1;
+    for (int k = 1; k <= 40; ++k) {
+      int64_t t = k * 50 * MS + 20 * MS;
+      auto q = Q0;
+      q[4] += 0.5f * k;  // 10 °/s
+      Decision d = S(c, nullptr, fb_at(q, t), t);
+      if ((d.fault & bits::HOLD_FAIL) && k_fail < 0) k_fail = k;
+    }
+    std::printf("   J4 10 °/s 漂移：HOLD_FAIL 于 %d ms\n", k_fail * 50 + 20);
+    CHECK(k_fail > 0);
   }
   {  // RESET 清 HOLD_FAIL 用同一判据：抖动静止可清，仍在 2 °/s 移动不可清
     for (int moving = 0; moving < 2; ++moving) {

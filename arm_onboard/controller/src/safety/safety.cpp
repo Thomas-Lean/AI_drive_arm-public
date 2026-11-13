@@ -179,7 +179,7 @@ void Core::eval_hold_confirm(Decision& d, const Feedback& fb, const Fresh& fresh
     }
     float rg = 0;
     bool full = fresh[i] && still_window(i, c.t0, rg);
-    if (full && rg <= cfg::kStillRangeDeg) {
+    if (full && rg <= cfg::still_range_deg(i)) {
       c.active = false;
       continue;
     }
@@ -420,7 +420,7 @@ void Core::do_reset(Decision& d, const Cmd& c, const Feedback& fb, const Fresh& 
     bool ok = true;
     for (int i = 0; i < N; ++i) {
       float rg = 0;
-      ok &= still_window(i, INT64_MIN, rg) && rg <= cfg::kStillRangeDeg;  // 与保持确认同一判据
+      ok &= still_window(i, INT64_MIN, rg) && rg <= cfg::still_range_deg(i);  // 与保持确认同一判据
     }
     if (ok) clr |= bits::HOLD_FAIL;
   }

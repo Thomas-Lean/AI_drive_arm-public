@@ -14,7 +14,7 @@ namespace cfg {
 
 // ---------------- 版本 ----------------
 
-constexpr const char* kCtrlVersion = "0.1.3";  // 发布版本，与根 CHANGELOG.md 对应；启动日志打印
+constexpr const char* kCtrlVersion = "0.1.4";  // 发布版本，与根 CHANGELOG.md 对应；启动日志打印
 
 // ---------------- 总线与舵机 ----------------
 
@@ -160,7 +160,11 @@ constexpr uint16_t kTrackStuckCurrentMa = 500;
 // J0 0.3°、J1/J2 0.2°、J5 0.1°、J3/J4/J6 0；相邻帧 |Δq| 最大 0.3°。
 // 取 8 而非 6：2 °/s × 5 间隔 = 0.5° 正好等于阈值，6 采样抓不住 2 °/s 慢移；8 采样 ≈ 0.7°，两边各留约 0.2°
 constexpr int kStillWindow = 8;           // 【暂定】约 350 ms
-constexpr float kStillRangeDeg = 0.5f;    // 【暂定；STILL_RANGE_DEG】
+constexpr float kStillRangeDeg = 0.5f;    // 【暂定；STILL_RANGE_DEG】J4 以外各轴
+// J4 单独放宽到 2.0°：视觉抓取实机 J4 在 40–94° 多个姿态保持时自激抖动，窗口范围 0.7–0.8° 反复误报
+// HOLD_FAIL（F78、F91）；2.0° 仍能抓住 ≥ 6 °/s 的慢移（8 采样 ≈ 350 ms），更慢的 J4 漂移不再判
+constexpr float kStillRangeDegJ4 = 2.0f;
+constexpr float still_range_deg(int axis) { return axis == 4 ? kStillRangeDegJ4 : kStillRangeDeg; }
 // 相邻采样跨度 > 2 个周期 → 窗口清空重攒（缺回包 / 跨度过大不证明静止，R08）【暂定】
 constexpr int kStillMaxDtPeriods = 2;
 // 发 0x18 0x11 后须在此时间内确认停住；须能凑满 kStillWindow 个保持帧之后的采样（8 × 50 ms ≈ 370 ms + 余量）【暂定】
