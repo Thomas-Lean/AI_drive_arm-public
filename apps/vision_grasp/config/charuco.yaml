@@ -6,7 +6,7 @@
 # 且 max_pose_attempts <= 已填数量。
 # =====================================================================
 
-board:                       # --- 标记板（单 ArUco，或 ChArUco 棋盘做对比实验） ---
+board:                       # --- 标记板（单 ArUco，或 ChArUco 棋盘） ---
   kind: charuco                # aruco（默认，单标记）| charuco（棋盘；产出文件名自动加
                              #   _charuco 后缀，与单 ArUco 结果互不覆盖）
   type: aruco_single
@@ -19,8 +19,7 @@ board:                       # --- 标记板（单 ArUco，或 ChArUco 棋盘做
   edge_margin_px: 10         # 单 ArUco：标记距图像边缘的最小余量
   max_reprojection_px: 1.0   # 两种板共用的 PnP 重投影误差上限（px）
   min_pnp_error_gap_px: 0.15 # 单 ArUco：IPPE 两解误差间隔下限（charuco 多角点天然消歧，不用）
-  # --- ChArUco（kind: charuco 时生效；下面是手头板子的标称值，
-  #     开测前用尺实测格边与 marker 边，按实测值改） ---
+  # --- ChArUco（kind: charuco 时生效；按实测格边与 marker 边填写） ---
   squares_x: 5               # 横向格数
   squares_y: 5               # 纵向格数
   square_length_m: 0.030     # 格边长（m）；marker_length_m 用上面同一键，charuco 时填 0.022
@@ -43,7 +42,7 @@ robot:                       # --- 机械臂（d1t_sdk.D1Arm，DDS 直连 d1t_ar
   stable_tolerance_deg: 0.3  # 稳定窗内容许波动
   ready_pose_deg: [0.0,-40.0,40.0,0.0,40.0,0.0]   # 预备姿态（低速接近）
   safe_pose_deg: [0.0,-90.0,89.0,0.0,0.0,0.0]     # 安全姿态（收尾/异常退场；J2 用 89°，
-                             #   实测限位 [-97,89]——原工程 90° 超上界 1°）
+                             #   J2 限位 [-97,89]）
   poses_deg:                 # 采集点位（示教或手填；J5 正负两侧都要有）
     - [0.10, -20.30, 25.60, -5.20, 43.70, -4.00]
     - [-45.00, -22.70, 18.50, 31.40, 73.40, 48.90]
@@ -126,11 +125,11 @@ grasp:                       # --- YOLO 抓取（grasp_yolo / yolo_detect 使用
                              # 检测白名单=yoloe 提示词（自由文本）。
                              # 物理目标=弹性握力球+矿泉水瓶。
                              # 注意：yoloe 下清空此表 => 不做 set_classes => 零检测！
-  depth_quantile: 0.5        # 抓取点深度分位（0.5≈物心，reBot 出厂值）
+  depth_quantile: 0.5        # 抓取点深度分位（0.5≈物心）
   top_depth_quantile: 0.15   # top_down 用：取物体区域最近 15% 深度当顶面（透明瓶/托盘红外穿透会读远）
   support_z_m: 0.0          # top_down 用：物体所在支撑面在基座系的高度（底座与桌面同面=0）；中线不低于它+半爪宽
   approach: top_down         # top_down=竖直向下进给、爪夹物体水平短边（躺放物体）；camera_ray=沿相机视线进给
-  open_axis: "y"             # 爪开合轴在 SDK TCP 系的方向：y 或 z（首抓 90° 错位则换）
+  open_axis: "y"             # 爪开合轴在 SDK TCP 系的方向：y 或 z（开合方向差 90° 时改 z）
   final_motion: "linear"     # 末段及原路退出：linear=move_l；joint=关节插补
   linear_vel_mps: 0.08       # 末段期望平均 TCP 速度（米/秒）
   linear_acc_mps2: 0.25      # 末段 TCP 加速度参数（米/秒²）
@@ -142,9 +141,8 @@ grasp:                       # --- YOLO 抓取（grasp_yolo / yolo_detect 使用
   gripper_close_factor: 0.7  # 只决定闭合到哪为止的上限（实测爪宽×系数）；
                              #   夹住后锁在停住角（close_and_lock），不顶着物体保持
   gripper_close_min_mm: 15.0 # 闭口下限（防测量偏小时对刚性物硬闭堵转）
-  grasp_offset_m: 0.040      # TCP 沿进给方向停在抓取点外多远：SDK 的 TCP 在两指根部（d1t.json），指尖再伸出 50 mm（实测）；
+  grasp_offset_m: 0.040      # TCP 沿进给方向停在抓取点外多远：SDK 的 TCP 在两指根部（d1t.json），指尖再伸出 50 mm；
                              #   0.040 = 指尖越过抓取点约 1 cm、指垫夹在物体中线。到位太深调大，太浅调小
-  base_offset_m: [0.0, 0.0, 0.0]  # 抓取点固定偏差补偿（基座系 x 前 / y 左 / z 上，米）：实测抓偏 = 实际物体 − 程序给的位置，
-                             #   填这个差；同一方向反复偏同样多才填，偏差忽大忽小先重标定（见 README「复刻时抓偏怎么调」）
+  base_offset_m: [0.0, 0.0, 0.0]  # 抓取点固定偏差补偿（基座系 x 前 / y 左 / z 上，米）：填「实测物体中点 − 日志位置」的稳定均值（见 README「精度调整」）
   min_base_z_m: 0.02         # 目标基座系 z 下限=工作面高度+余量（防砸台面）
                              #   底座与桌面同面时物体天然在 z 0~4cm，勿设过高
