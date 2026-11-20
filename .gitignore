@@ -8,3 +8,6 @@ build/
 
 # 示教回放生成的点位文件
 tools/arm_client/points.json
+
+# vision_grasp：yoloe 文本编码器（~240MB，按需下载；其余产物见 apps/vision_grasp/.gitignore）
+apps/mobileclip2_b.ts
