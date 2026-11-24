@@ -14,7 +14,7 @@ namespace cfg {
 
 // ---------------- 版本 ----------------
 
-constexpr const char* kCtrlVersion = "0.1.4";  // 发布版本，与根 CHANGELOG.md 对应；启动日志打印
+constexpr const char* kCtrlVersion = "0.1.5";  // 发布版本，与根 CHANGELOG.md 对应；启动日志打印
 
 // ---------------- 总线与舵机 ----------------
 
@@ -143,6 +143,28 @@ constexpr float kJ6TempReleaseC = 50.0f;
 // 目标跟着走，30.2°→38.2°，电流降到空夹 14 mA）。J6 总线目标比锁定值更闭合 ≥0.2° 时发一次 0x08 到锁定值
 // 【暂定；> 协议分辨率 0.1°，避免每周期重发】
 constexpr float kJ6HotRetargetDeg = 0.2f;
+
+// ---------------- J6 碰到即锁（warn J6_CONTACT） ----------------
+// 「差」= J6 实测角 − J6 总线目标（闭合 = 角度变小，F60）；差 > 0 即命令比实测更闭合、舵机在往里顶。
+// 触发后 J6 目标锁定为当时实测角（只锁一次，不跟随实测——F70 棘轮），锁住后电流降到 14–21 mA（F69）。
+// 阈值按百岁山 330 ml 瓶（硬物）实测定、SDK 夹爪 ≤20°/s。软物体电流可能到不了
+//   电流阈值，靠停滞判据兜底（README 已知限制）。
+// 闭合方向门槛：差 > 1.0° 才算正在往里合【暂定；F69 差 1.6° 约 65 mA；F88 命令到停住角时差约 0.3 mm 不应触发】
+constexpr float kJ6ContactClosingDeg = 1.0f;
+// 判据 a：电流 > 150 mA 连续 2 周期（F60 空夹全程 14 mA、夹瓶稳态 252–328 mA）
+constexpr uint16_t kJ6ContactCurrentMa = 150;
+constexpr int kJ6ContactCurrentCycles = 2;
+// 判据 b：差 > 2.0° 且停滞起点之后连续 2 周期实测角相对起点变化 < 0.3°（F57 停稳后 0x16 角度极差 0.0°；
+//   差门槛【暂定；F69 差 2.2° 约 151 mA】；空夹 20°/s 每周期走 1°，不会满足）
+constexpr float kJ6ContactStallErrDeg = 2.0f;
+constexpr float kJ6ContactStillDeg = 0.3f;
+constexpr int kJ6ContactStillCycles = 2;
+// 夹紧量：锁定目标 = 触发时实测角 − 2.5°（往闭合方向多给一点；实机锁在实测角、及 −1.5° 时夹持偏松）。
+//   F69：停住角与目标差 2.2° 约 151 mA、4 min 27→37.5 ℃；差 3.2–3.6° 约 311–369 mA。只算一次，不跟随实测（F70）
+constexpr float kJ6ContactSqueezeDeg = 2.5f;
+// 锁定中 STREAM 的 J6 目标比锁定目标张开 > 夹紧量 + 1.0°（= 触发时实测角 + 1.0°）才解锁；之间的目标仍钳在锁定目标。
+//   相对实测角留 1.0° > F70 瓶子回弹 0.7°：上位机按回弹后的实测角下令（「锁在实测停住角」）不会解锁、不会丢夹紧量
+constexpr float kJ6ContactReleaseDeg = kJ6ContactSqueezeDeg + 1.0f;
 
 // ---------------- 卡住判定（任务书 §3.6，仅 J0–J5 流式） ----------------
 

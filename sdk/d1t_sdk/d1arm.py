@@ -30,7 +30,7 @@ from ._common import (CTRL_ESTOP, CTRL_FAULT, CTRL_HOLD, CTRL_IDLE, CTRL_RELEASE
                       CTRL_STREAMING, D1ArmError, DT_MS, J6_SPEED_DPS, MODE_ESTOP,
                       MODE_HOLD, MODE_RELEASE, MODE_RESET, MODE_STREAM,
                       SERVO_LIMITS, URDF_VMAX_DPS, ArmCmd_, CTRL_STATE_NAMES, mode_name,
-                      dds_qos, make_cmd_topic, make_state_topic)
+                      WARN_J6_CONTACT, dds_qos, make_cmd_topic, make_state_topic)
 from ._joint_model import (GRIPPER_TABLE, check_q_urdf, deg2rad, gripper_deg_to_mm,
                            gripper_mm_to_deg, joint_to_servo, rad2deg,
                            servo_to_joint, urdf_limits)
@@ -309,6 +309,7 @@ class D1Arm:
             "ctrl_state": int(st.ctrl_state),
             "fault": int(st.fault),
             "warn": int(st.warn),
+            "j6_contact": bool(st.warn & WARN_J6_CONTACT),  # 夹爪碰到即锁生效中
             "temp_c": [float(t) for t in st.temp_c],
             "current_ma": [int(c) for c in st.current_ma],
         }

@@ -375,6 +375,13 @@ void Core::do_stream(Decision& d, const Cmd& c, const Feedback& fb, bool j6_hot,
     if (s.clamped) d.warn |= bits::STEP_CLAMPED;
     if (l.clamped) d.warn |= bits::LIMIT_CLAMPED;
     float t = l.q;
+    if (i == N - 1 && j6_contact_on_) {
+      // 碰到即锁：张开超过锁定目标 + kJ6ContactReleaseDeg 才解锁；否则（更闭合或小幅张开）钳在锁定目标，保住夹紧量
+      if (t > j6_contact_tgt_ + cfg::kJ6ContactReleaseDeg)
+        j6_contact_clear(d, "STREAM 目标张开");
+      else
+        t = j6_contact_tgt_;
+    }
     if (i == N - 1 && j6_hot) {
       // 降出力：目标不比锁定值更闭合（夹爪闭合 = 角度变小，F60）；更张开的照常执行并更新锁定值（§3.5，TC-010 实机）
       if (t < j6_derate_tgt_) t = j6_derate_tgt_;
@@ -512,6 +519,89 @@ void Core::j6_derate(Decision& d, const Feedback& fb, const Fresh& fresh, bool j
   d.events.push_back(fmt("J6 降出力：0x08 目标移到锁定角 %.1f°", m));
 }
 
+// J6 碰到即锁（config.hpp「J6 碰到即锁」）。用的是上一周期读回与最近写成功的目标。
+void Core::j6_contact_clear(Decision& d, const char* why) {
+  if (j6_contact_on_) d.events.push_back(std::string("J6 碰到即锁解除（") + why + "）");
+  j6_contact_on_ = false;
+  j6_contact_rehold_ = false;
+  j6_cur_n_ = j6_still_n_ = 0;
+}
+
+void Core::j6_contact_detect(Decision& d, const Feedback& fb, const Fresh& fresh) {
+  const int j = N - 1;
+  if (!j6_forcing()) {  // 释放 / 阻尼 / 过温释放 / 清圈中：J6 不出力，锁定无意义
+    j6_contact_clear(d, "J6 不再出力");
+    return;
+  }
+  if (j6_contact_on_ || startup_noact_) return;
+  // 45 ℃ 降出力中目标已锁在实测角，不再另判（降出力行为保持原样；已锁定的碰到即锁继续生效）
+  if (j6_derate_on_) {
+    j6_cur_n_ = j6_still_n_ = 0;
+    return;
+  }
+  const AxisSample& a = fb.ax[j];
+  // 不新鲜不证明任何事（R08）：计数清零
+  if (!fresh[j] || !std::isfinite(bus_tgt_[j])) {
+    j6_cur_n_ = j6_still_n_ = 0;
+    return;
+  }
+  const float err = a.q - bus_tgt_[j];  // > 0：命令比实测更闭合
+  if (err <= cfg::kJ6ContactClosingDeg) {
+    j6_cur_n_ = j6_still_n_ = 0;
+    return;
+  }
+  j6_cur_n_ = a.current_ma > cfg::kJ6ContactCurrentMa ? j6_cur_n_ + 1 : 0;
+  // 停滞：j6_still_n_ = 起点（记 1）+ 之后连续相对起点变化 < kJ6ContactStillDeg 的周期数
+  if (err > cfg::kJ6ContactStallErrDeg) {
+    if (j6_still_n_ > 0 && std::fabs(a.q - j6_still_ref_) < cfg::kJ6ContactStillDeg) {
+      ++j6_still_n_;
+    } else {
+      j6_still_ref_ = a.q;
+      j6_still_n_ = 1;  // 起点本身记 1
+    }
+  } else {
+    j6_still_n_ = 0;
+  }
+  const bool by_cur = j6_cur_n_ >= cfg::kJ6ContactCurrentCycles;
+  const bool by_stall = j6_still_n_ > cfg::kJ6ContactStillCycles;
+  if (!by_cur && !by_stall) return;
+  j6_contact_on_ = true;
+  // 锁定目标 = 实测角 − 夹紧量（闭合方向），只算一次，之后不跟随实测（F70）
+  j6_contact_tgt_ = clamp_limit(j, a.q - cfg::kJ6ContactSqueezeDeg).q;
+  j6_cur_n_ = j6_still_n_ = 0;
+  char buf[200];
+  std::snprintf(buf, sizeof(buf), "J6 碰到即锁（%s电流 %u mA）：目标锁定 %.1f°（实测 %.1f° − %.1f°），命令差 %.1f°",
+                by_cur ? "" : "停滞，", unsigned(a.current_ma), j6_contact_tgt_, a.q, cfg::kJ6ContactSqueezeDeg, err);
+  d.events.push_back(buf);
+}
+
+// 锁定期间：报 warn；J6 本周期已有 0x08 → 目标钳到锁定目标；没有 → 总线目标与锁定目标差 ≥0.2°，
+// 或本周期给 J6 发了 0x18 0x11（舵机会锁在当时位置、夹紧量消失，F69）时，补发一帧 0x08 到锁定目标（排在保持帧之后）
+void Core::j6_contact_enforce(Decision& d) {
+  if (!j6_contact_on_) return;
+  d.warn |= bits::J6_CONTACT;
+  if (!j6_forcing() || startup_noact_ || d.estop) return;  // ESTOP 周期：冻结帧 + 保持优先，不追加
+  const int j = N - 1;
+  const float m = j6_contact_tgt_;
+  if (d.move_axis[j]) {
+    if (d.move_q[j] < m) d.move_q[j] = m;
+    return;
+  }
+  bool j6_hold_frame = false;
+  for (auto& o : d.ops)
+    if (o.kind == BusOp::STOP && o.axis == j && o.mode == kHold) j6_hold_frame = true;
+  if (!j6_hold_frame && !j6_contact_rehold_ && std::isfinite(bus_tgt_[j]) &&
+      std::fabs(m - bus_tgt_[j]) < cfg::kJ6HotRetargetDeg)
+    return;
+  d.move_axis[j] = true;
+  d.move_q[j] = m;
+  d.move_power[j] = j6_power_ ? j6_power_ : cfg::kGripPowerMaxMw;
+  if (!d.has_move()) {
+    d.move_time_ms = uint16_t(period_ms_);
+    d.ops.push_back({BusOp::MOVE, 0, 0, 0.0f});
+  }
+}
+
 Decision Core::step(const Cmd* cmd, const Feedback& fb, int64_t now) {
   Decision d;
   uint32_t newf = 0;
@@ -544,6 +634,9 @@ Decision Core::step(const Cmd* cmd, const Feedback& fb, int64_t now) {
     need_hold_all_ = false;
     if (!startup_noact_) hold_all(d, false, fb);
   }
+
+  // 2b) J6 碰到即锁检测（锁存中也执行，同降出力）
+  j6_contact_detect(d, fb, fresh);
 
   // 3) 命令
   if (cmd) {
@@ -580,6 +673,8 @@ Decision Core::step(const Cmd* cmd, const Feedback& fb, int64_t now) {
 
   // 5) J6 45 ℃ 降出力（独立安全动作）
   j6_derate(d, fb, fresh, j6_hot);
+  // 5b) J6 碰到即锁：执行锁定角
+  j6_contact_enforce(d);
 
   // 6) ESTOP 周期：冻结帧排最前，不执行清圈（R05）
   if (d.estop) {
@@ -611,6 +706,7 @@ void Core::commit(Decision& d, const std::vector<OpResult>& res, int64_t now) {
         if (r == OpResult::OK) {
           for (int i = 0; i < N; ++i)
             if (d.move_axis[i]) bus_tgt_[i] = d.move_q[i];
+          if (d.move_axis[N - 1]) j6_contact_rehold_ = false;  // 保持帧之后的 0x08 已写出
           if (st_ == CtrlState::STREAMING && !d.estop) stream_base_ok_ = true;
         } else {
           stream_base_ok_ = false;  // 舵机还在旧目标：下一帧步长从实测起算
@@ -624,6 +720,8 @@ void Core::commit(Decision& d, const std::vector<OpResult>& res, int64_t now) {
             // 用实测角会把重力下沉写进 q_target，下一个 SDK 进程据此保持 → 臂逐次下掉（F76 跨进程版）
             if (!std::isfinite(bus_tgt_[o.axis])) bus_tgt_[o.axis] = o.q_meas;
             if (!conf_[o.axis].active) conf_[o.axis] = Confirm{true, now, 0};
+            // 碰到即锁中 J6 写了 0x18 0x11：舵机锁在当时位置，须再发 0x08 到锁定目标（同批次后面的 0x08 会清掉此标记）
+            if (o.axis == N - 1 && j6_contact_on_) j6_contact_rehold_ = true;
           } else {
             bus_tgt_[o.axis] = nan;
             conf_[o.axis].active = false;

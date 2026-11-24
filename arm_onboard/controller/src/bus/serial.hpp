@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <random>
 #include <string>
@@ -87,6 +88,8 @@ class FakeSerial : public ISerial {
   void inject_locked(int axis);                           // 置为保持锁力态（此时 0x11 无效）
   void inject_temp_adc(int axis, int adc);                // 温度 ADC 原值（0 / ≥4096 = 非法；<0 = 恢复按温度换算）
   void inject_reply_delay_ms(int axis, double ms);        // 该轴回包额外延迟（迟到帧测试）
+  // 物体挡住：角度不再小于 deg（J6 闭合方向）；目标比 deg 更小 0.5° 以上被顶住时回报电流 ma。deg = NaN 取消
+  void inject_block(int axis, float deg, uint16_t ma);
 
   // ---- 观测（线程安全，测试用） ----
   enum class SMode { RELEASED, HOLD, MOVING, DAMP };
@@ -120,6 +123,8 @@ class FakeSerial : public ISerial {
     float hold_drift = 0.0f;
     int temp_adc = -1;  // ≥0：直接用这个 ADC 原值
     int64_t delay_ns = 0;
+    double block_deg = std::numeric_limits<double>::quiet_NaN();  // 物体挡住的角度（NaN = 无）
+    uint16_t block_ma = 300;
     int clear_count = 0, stop_count = 0, move_count = 0;
   };
   struct Pending {

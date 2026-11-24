@@ -14,18 +14,34 @@
 
 ## 安装
 
+在仓库根目录执行一次（装 Cyclone DDS 0.10.2 与 Python 依赖，已装的自动跳过；Python ≥3.8）：
+
 ```bash
-pip3 install --user cyclonedds==0.10.2 numpy   # 必须 0.10.2，与臂上一致
+bash deploy/setup_host.sh
 ```
 
-`sdk/` 目录整体拷走即可用（`import d1t_sdk` 需 sdk/ 在 PYTHONPATH，或直接在 sdk/ 下
-运行示例；Python ≥3.8）。
+## 使用前：每个终端先设环境
+
+SDK 和命令行都要先在**当前终端**里 source 环境脚本（设 DDS 网卡与对端、库路径、PYTHONPATH）。
+每开一个新终端都要执行一次；fish 用户先敲 `bash`。
+
+```bash
+cd <仓库根目录>
+source deploy/env.sh real <本机接臂的网卡名>   # 连真臂，例：source deploy/env.sh real enp5s0
+source deploy/env.sh sim                      # 或：同机仿真（先 bash deploy/sim_start.sh 起仿真控制器）
+python3 -m d1t_sdk state                      # 验证：mode 为 IDLE/HOLD，online 七个 True
+```
+
+- 网卡名用 `ip -br addr` 查，是上位机接臂网线的那张（地址在 192.168.123.x 网段）。
+- 对端 IP 默认是臂的 192.168.123.100，一般不用改；完整用法见 `deploy/env.sh` 文件头。
+- 同一台电脑上同时跑多个 SDK 程序时，给每个终端不同角色：第 4 个参数 `sdk`（默认）/ `record` / `viz`，
+  例：`source deploy/env.sh real enp5s0 '' record`。
 
 ## 快速开始（5 行）
 
 ```python
 from d1t_sdk import D1Arm
-arm = D1Arm()                        # 需先设 CYCLONEDDS_URI（见实机验收清单 §0.3）
+arm = D1Arm()                        # 需先 source deploy/env.sh（见上一节）
 arm.home(4.0); arm.wait_idle()       # 回全零位（URDF 全零，臂前伸）
 print(arm.state()["tcp"]["pos"])     # TCP 位置 [m]
 arm.move_joints([0, -40, 60, 0, 30, 0], vel_dps=30)   # URDF 角（度）
@@ -33,7 +49,7 @@ arm.gripper(45)                      # 夹爪开到 45 mm（金属指间距）
 arm.close()
 ```
 
-命令行（同 d1arm_sdk 的 `_cli`，IP 换成 CYCLONEDDS_URI 环境变量）：
+命令行（同 d1arm_sdk 的 `_cli`，连接参数由 `deploy/env.sh` 设定）：
 
 ```bash
 python3 -m d1t_sdk state | ping | home | free | lock | estop | reset | park
@@ -120,8 +136,8 @@ stderr 打一行 `失败：原因` 再打一行用法，退出码 2，不连臂�
 2. 起控制器（编译见 `arm_onboard/controller/README.md`；完整命令在 `deploy/实机部署.md`）。
    **跨机必须固定 ParticipantIndex**：臂上控制器 0、SDK 发送端 3（端口 = 7410+2×index）；
    不固定则互相发现不了，一条帧都收不到。同机仿真也建议各进程固定不同 index。
-3. 上位机设 `CYCLONEDDS_URI`（AllowMulticast=false + 单播 Peer 互指，原样命令在
-   `sdk/实机验收清单.md` §0.3 与 `deploy/实机部署.md` §4）。
+3. 上位机每个终端 `source deploy/env.sh real <网卡>`（见「使用前」一节；它设定的 `CYCLONEDDS_URI`
+   为关多播 + 单播 Peer 互指 + 固定 ParticipantIndex，细节见 `deploy/实机部署.md` §4）。
 
 ## 单位约定（与 d1arm_sdk 一致）
 
@@ -175,7 +191,7 @@ stderr 打一行 `失败：原因` 再打一行用法，退出码 2，不连臂�
 d1arm_sdk `fillState` 键：`q_deg`（6 URDF 角）、`servo_raw_deg`（6 舵机角）、`gripper_mm`、
 `calibrated`（恒 True）、`tcp`（`pos`/`quat`/`rpy`）、`online`（7 bool）、
 `voltage_mv`（7）、`mode`、`stamp_ms`；本控制器独有：`seq`、`ctrl_state`（原始 0–6）、
-`fault`、`warn`、`temp_c`（7）、`current_ma`（7）。
+`fault`、`warn`、`temp_c`（7）、`current_ma`（7）、`j6_contact`（bool：夹爪碰到物体，控制器已把 J6 锁在碰到时的角度，再往里 2.5° 夹紧；再往里合的命令不执行，张开到碰到时的角度再多 1° 以上自动解除）。
 
 `mode` 取值（与 d1arm_sdk 不同：控制器状态原样给出，不合并）：
 

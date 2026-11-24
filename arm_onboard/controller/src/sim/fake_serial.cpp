@@ -1,4 +1,5 @@
 // fake_serial.cpp —— --sim 用的 7 舵机仿真（无硬件）
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -47,14 +48,19 @@ FakeSerial::FakeSerial(uint32_t seed) : rng_(seed) {
 double FakeSerial::pos_at(const Servo& s, int64_t t) const {
   double dt = double(t - s.t0) * 1e-9;
   if (dt < 0) dt = 0;
+  double p;
   switch (s.mode) {
     case SMode::MOVING:
-      return s.target + (s.a0 - s.target) * std::exp(-dt / s.tau_s);
+      p = s.target + (s.a0 - s.target) * std::exp(-dt / s.tau_s);
+      break;
     case SMode::HOLD:
-      return s.a0 + double(s.hold_drift) * dt;
+      p = s.a0 + double(s.hold_drift) * dt;
+      break;
     default:
-      return s.a0;
+      p = s.a0;
   }
+  if (std::isfinite(s.block_deg) && p < s.block_deg) p = s.block_deg;  // 物体挡住
+  return p;
 }
 
 bool FakeSerial::write_all(const uint8_t* p, size_t n) {
@@ -122,11 +128,16 @@ frame::Bytes FakeSerial::make_reply(uint8_t cmd, const frame::Bytes& content, Se
 frame::Bytes FakeSerial::monitor_content(uint8_t id, int64_t t) {
   Servo& s = sv_[id];
   double pos = pos_at(s, t);
-  bool moving = s.mode == SMode::MOVING && std::fabs(pos - s.target) > 0.1;
+  // 被物体顶住：目标比挡住角更闭合 > 3.0° → block_ma；0.5–3.0°（夹紧量）→ min(151, block_ma)（F69 差 2.2° 约 151 mA）
+  double gap = (std::isfinite(s.block_deg) && s.mode != SMode::RELEASED && pos <= s.block_deg + 0.05)
+                   ? s.block_deg - s.target : 0.0;
+  bool pushed = gap > 0.5;
+  bool moving = !pushed && s.mode == SMode::MOVING && std::fabs(pos - s.target) > 0.1;
+  uint16_t cur = gap > 3.0 ? s.block_ma : pushed ? std::min<uint16_t>(151, s.block_ma) : moving ? 120 : 14;  // 电流 mA（静止 14 mA，F43）
   frame::Bytes c{id};
   put_u16(c, 12200);                    // 电压 mV
-  put_u16(c, moving ? 120 : 14);        // 电流 mA（静止 14 mA，F43）
-  put_u16(c, moving ? 1500 : 172);      // 功率 mW
+  put_u16(c, cur);
+  put_u16(c, uint16_t(std::min(65535, cur * 12)));  // 功率 mW ≈ 12 V × 电流
   put_u16(c, s.temp_adc >= 0 ? uint16_t(s.temp_adc) : adc_from_c(s.temp_c));  // 温度 ADC
   c.push_back(uint8_t((moving ? 0x01 : 0x00) | s.status_inj));  // bit0 运动中（F50 观察）
   put_i32(c, int32_t(std::lround(pos * 10.0)));
@@ -309,6 +320,15 @@ void FakeSerial::inject_temp_adc(int a, int adc) {
 void FakeSerial::inject_reply_delay_ms(int a, double ms) {
   std::lock_guard<std::mutex> lk(mu_);
   sv_[a].delay_ns = int64_t(ms * 1e6);
+}
+
+void FakeSerial::inject_block(int a, float deg, uint16_t ma) {
+  std::lock_guard<std::mutex> lk(mu_);
+  Servo& s = sv_[a];
+  s.a0 = pos_at(s, now_mono_ns());
+  s.t0 = now_mono_ns();
+  s.block_deg = deg;
+  s.block_ma = ma;
 }
 
 FakeSerial::ServoView FakeSerial::view(int a) {

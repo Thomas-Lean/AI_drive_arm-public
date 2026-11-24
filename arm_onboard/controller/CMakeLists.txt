@@ -65,7 +65,7 @@ endif()
 
 # ---- 测试（Mac 无硬件可跑） ----
 enable_testing()
-foreach(t test_frame test_safety test_sim test_regress)
+foreach(t test_frame test_safety test_sim test_regress test_j6_contact)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE d1t_core)
   target_include_directories(${t} PRIVATE tests)
@@ -74,3 +74,4 @@ add_test(NAME frame COMMAND test_frame)
 add_test(NAME safety COMMAND test_safety)
 add_test(NAME sim_quick COMMAND test_sim --quick)
 add_test(NAME regress COMMAND test_regress)  # 历史缺陷复现场景（永久回归）
+add_test(NAME j6_contact COMMAND test_j6_contact)  # J6 碰到即锁

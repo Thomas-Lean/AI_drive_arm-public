@@ -33,6 +33,7 @@ static void usage() {
       "  --sim-status J:HEX       仿真：Jj 状态字节叠加位\n"
       "  --sim-temp J:C           仿真：Jj 温度 ℃\n"
       "  --sim-mturn J:DEG        仿真：启动前 Jj 多圈累计角\n"
+      "  --sim-block J:DEG[:MA]   仿真：物体挡住 Jj，角度不再小于 DEG，被顶住时回报 MA mA（默认 300）\n"
       "  --fake-client SEC        不用 DDS，进程内假上位机发 J0/J3 ±5° 0.2 Hz 正弦 SEC 秒后退出并打印统计\n"
       "  -v                       打印每条事件\n",
       cfg::kSerialPort, cfg::kPeriodMsMin, cfg::kPeriodMsMax, cfg::kPeriodMsDefault);
@@ -77,6 +78,12 @@ int main(int argc, char** argv) {
       fake->inject_temp_c(j, float(v));
     } else if (a == "--sim-mturn" && parse_jv(need("--sim-mturn"), j, v)) {
       fake->inject_mturn(j, float(v));
+    } else if (a == "--sim-block") {
+      double deg;
+      unsigned ma = 300;
+      int n = std::sscanf(need("--sim-block"), "%d:%lf:%u", &j, &deg, &ma);
+      if (n < 2 || j < 0 || j >= N || ma > 65535) return usage(), 2;
+      fake->inject_block(j, float(deg), uint16_t(ma));
     } else if (a == "--fake-client") {
       fake_sec = std::atof(need("--fake-client"));
     } else if (a == "-v") {

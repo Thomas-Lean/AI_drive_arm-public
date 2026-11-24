@@ -112,6 +112,8 @@ class Core {
   bool j6_derate_on() const { return j6_derate_on_; }
   float j6_derate_tgt() const { return j6_derate_tgt_; }
   bool j6_mturn_pending() const { return j6_pending_; }
+  bool j6_contact_on() const { return j6_contact_on_; }
+  float j6_contact_tgt() const { return j6_contact_tgt_; }
 
   enum class Ax : uint8_t { UNKNOWN, MOVING, HOLD, RELEASED, DAMPED };
   Ax axis_mode(int i) const { return ax_[i]; }
@@ -134,6 +136,9 @@ class Core {
   void do_stream(Decision& d, const Cmd& c, const Feedback& fb, bool j6_hot, bool& applied);
   void do_estop(Decision& d, const Cmd& c, const Feedback& fb, const Fresh& fresh, int64_t now);
   void j6_derate(Decision& d, const Feedback& fb, const Fresh& fresh, bool j6_hot);
+  void j6_contact_detect(Decision& d, const Feedback& fb, const Fresh& fresh);
+  void j6_contact_clear(Decision& d, const char* why);
+  void j6_contact_enforce(Decision& d);
   bool j6_forcing() const;  // J6 是否处于持续出力状态（流式 / 保持，且未被排除）
   bool j6_excluded() const;
   uint8_t stop_mode_of(int i) const;
@@ -151,6 +156,14 @@ class Core {
   // 进入时锁定一次目标 = 当时新鲜实测角，之后不跟随实测（防瓶子回弹顶开手指的棘轮），只被更张开的 STREAM 目标更新
   bool j6_derate_on_ = false;
   float j6_derate_tgt_ = 0.0f;
+  // 碰到即锁（config.hpp「J6 碰到即锁」）：触发时锁定一次目标 = 当时新鲜实测角，不跟随实测；
+  // STREAM 目标比锁定角张开 > kJ6ContactReleaseDeg、或 J6 不再出力时解锁
+  bool j6_contact_on_ = false;
+  float j6_contact_tgt_ = 0.0f;
+  int j6_cur_n_ = 0;          // 判据 a：连续电流超阈值周期数
+  int j6_still_n_ = 0;        // 判据 b：连续停滞周期数
+  float j6_still_ref_ = 0.0f;  // 判据 b：停滞起点实测角
+  bool j6_contact_rehold_ = false;  // 锁定中 J6 写过 0x18 0x11、之后还没写出 0x08 → 补发 0x08 到锁定目标
 
   bool wd_armed_ = false;  // 收到过第一条合法命令后才启用看门狗
   bool wd_tripped_ = false;

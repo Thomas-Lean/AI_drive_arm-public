@@ -65,6 +65,7 @@ FAULT_MTURN = 1 << 2
 FAULT_SERVO_PROT = 1 << 3
 FAULT_COMM_LOSS = 1 << 4
 FAULT_J6_THERMAL = 1 << 5
+WARN_J6_CONTACT = 1 << 17   # 夹爪碰到物体，控制器已把 J6 锁在碰到时的角度（不是故障）
 
 # ---- 臂参数（sdk/arm_model/d1t.json 是唯一来源；换臂改 JSON，不改代码）----
 ARM_MODEL = load_arm_model()
