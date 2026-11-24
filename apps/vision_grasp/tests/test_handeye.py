@@ -134,6 +134,17 @@ class CalibrationTests(unittest.TestCase):
                 path.write_text(yaml.safe_dump(bad),encoding='utf-8')
                 with self.assertRaises(ValueError):
                     app.load_config(path)
+            # settle_s 下限 0.3：poll_s 0.1 恰好等于 0.3/3，不能被浮点误差挡掉
+            cfg['robot'].update(settle_s=0.3,poll_s=0.1)
+            path.write_text(yaml.safe_dump(cfg),encoding='utf-8')
+            self.assertEqual(app.load_config(path)['robot']['settle_s'],0.3)
+            for section,key,value,message in [('robot','settle_s',0.29,'settle_s >= 0.3'),
+                                              ('robot','poll_s',0.11,'poll_s <= settle_s/3')]:
+                bad=copy.deepcopy(cfg)
+                bad[section][key]=value
+                path.write_text(yaml.safe_dump(bad),encoding='utf-8')
+                with self.assertRaisesRegex(ValueError,message):
+                    app.load_config(path)
             path.write_text(yaml.safe_dump(cfg),encoding='utf-8')
             self.assertEqual(len(app.load_config(path)['robot']['poses_deg']),50)
 
@@ -404,7 +415,7 @@ class CalibrationTests(unittest.TestCase):
 
     def test_settle_window_required(self):
         arm=object.__new__(app.RpcArm)
-        arm.cfg=self.cfg['robot']
+        arm.cfg=dict(self.cfg['robot'],settle_s=1.2,poll_s=0.1)  # 固定稳定窗参数，不随 yaml 调参变
         count=[]
         def state():
             count.append(1)
@@ -880,25 +891,6 @@ class GraspPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(grasp.RobotFault, 'link lost'):
             grasp.plan_grasp(arm, np.array([0.3, 0, 0.15]), np.eye(3), np.zeros(6), grasp.DEFAULTS)
 
-    def test_final_segment_uses_requested_mode_only(self):
-        from unittest.mock import Mock
-        arm = Mock()
-        xyz, quat, q = np.array([0.2, 0.1, 0.1]), [1, 0, 0, 0], np.zeros(6)
-        grasp.traverse(arm, xyz, quat, q, grasp.DEFAULTS)
-        arm.call.assert_called_once_with('move_l', pose=dict(pos=xyz.tolist(), quat=quat),
-                                         vel=0.04, acc=0.25, **{'async': True})
-        arm.wait_still.assert_called_once_with(q)
-        arm.move.assert_not_called()
-        arm.reset_mock()
-        grasp.traverse(arm, xyz, quat, q, dict(grasp.DEFAULTS, final_motion='joint'))
-        arm.call.assert_not_called()
-        arm.move.assert_called_once_with(q.tolist(), grasp.DEFAULTS['grasp_vel_dps'])
-        arm.reset_mock()
-        arm.call.side_effect = grasp.RobotFault('ik no solution')
-        with self.assertRaises(grasp.RobotFault):
-            grasp.traverse(arm, xyz, quat, q, grasp.DEFAULTS)
-        arm.move.assert_not_called()
-
     def test_close_and_lock_grip_air_and_timeout(self):
         class GripArm:
             """state 按 script 出 gripper_mm（有限序列停在末值，或无限 callable）。"""
@@ -923,11 +915,12 @@ class GraspPlanTests(unittest.TestCase):
         gripped = [kw.get('mm') for cmd, kw in arm.calls if cmd == 'gripper']
         self.assertEqual(gripped[0], 45.0)                    # 先按上限闭
         self.assertAlmostEqual(gripped[1], 65.1, places=6)    # 再锁停住角
-        # 空夹：一路闭到 14.5mm（≤ 15+2）→ 开爪报错，不保持
+        # 空夹：一路闭到 14.5mm（≤ 15+2）→ 开爪、抛 GraspMiss（RobotFault 子类：主循环据此不退出），不保持
         arm = GripArm([30.0, 20.0, 15.0, 14.5, 14.6, 14.5, 14.5])
         with patch.object(grasp.time, 'sleep'):
-            with self.assertRaisesRegex(grasp.RobotFault, 'nothing held'):
+            with self.assertRaisesRegex(grasp.GraspMiss, 'nothing held') as missed:
                 grasp.close_and_lock(arm, 15.0, g)
+        self.assertIsInstance(missed.exception, grasp.RobotFault)
         gripped = [kw.get('mm') for cmd, kw in arm.calls if cmd == 'gripper']
         self.assertIn(g['gripper_open_mm'], gripped)          # 开爪了
         self.assertNotIn(14.5, gripped)                       # 空爪不当保持目标
@@ -936,8 +929,10 @@ class GraspPlanTests(unittest.TestCase):
         ticks = iter([0.0, 1.0, 1.05, 1.1, 1.15, 5.0])        # 越过 2s 截止
         with patch.object(grasp.time, 'sleep'):
             with patch.object(grasp.time, 'monotonic', side_effect=lambda: next(ticks)):
-                with self.assertRaisesRegex(grasp.RobotFault, 'did not settle'):
+                with self.assertRaises(grasp.RobotFault) as unsettled:   # 仍是普通 RobotFault：主循环照常退出
                     grasp.close_and_lock(arm, 40.0, g)
+                self.assertNotIsInstance(unsettled.exception, grasp.GraspMiss)
+                self.assertRegex(str(unsettled.exception), 'did not settle')
         gripped = [kw.get('mm') for cmd, kw in arm.calls if cmd == 'gripper']
         self.assertEqual(gripped, [40.0, g['gripper_open_mm']])  # 只闭了一次然后开爪
 

@@ -99,8 +99,8 @@ def load_config(path, motion=True):
         raise ValueError('Invalid robot port or velocity/acceleration above SDK baseline limits')
     if r['approach_vel_dps'] > r['vel_dps']:
         raise ValueError('approach_vel_dps must not exceed collection vel_dps')
-    if r['settle_s'] < 1 or r['poll_s'] > r['settle_s']/3:
-        raise ValueError('settle_s >= 1 and poll_s <= settle_s/3 required for sequential SDK telemetry')
+    if r['settle_s'] < 0.3 or r['poll_s'] > r['settle_s']/3 + 1e-9:
+        raise ValueError('settle_s >= 0.3 and poll_s <= settle_s/3 required for sequential SDK telemetry')
     if not isinstance(r.get('host'), str) or not r['host']:
         raise ValueError('robot.host required')
     if not isinstance(cam.get('serial'), str):

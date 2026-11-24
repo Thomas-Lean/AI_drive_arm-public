@@ -31,15 +31,15 @@ robot:                       # --- 机械臂（d1t_sdk.D1Arm，DDS 直连 d1t_ar
   request_timeout_s: 5.0     # 等一帧 ArmState 的超时
   move_timeout_s: 45.0       # 单次运动到位超时
   vel_dps: 90.0              # 采集点之间的关节速度（°/s；控制器逐轴限速 100°/s）
-  acc_dps2: 100.0             # 关节加速度（°/s²）
-  approach_vel_dps: 40.0     # ready/safe 姿态的低速接近速度（°/s）
+  acc_dps2: 200.0             # 关节加速度（°/s²）
+  approach_vel_dps: 80.0     # ready/safe 姿态的低速接近速度（°/s）
   offline_grace_s: 5.0       # 瞬时舵机掉线容忍窗：超窗才判故障；7/7 掉线立即判故障。
                              #   本控制器偶发缺回包沿用上次值、连续 200 ms 才判故障，
                              #   此判据留作冗余防线
-  settle_s: 1.2              # 到位后的稳定窗时长（须覆盖多个遥测周期）
-  poll_s: 0.1                # 到位轮询间隔
-  arrival_tolerance_deg: 1.8 # 到位容差（含舵机死区；不代表 FK 精度）
-  stable_tolerance_deg: 0.3  # 稳定窗内容许波动
+  settle_s: 0.3              # 到位后的稳定窗时长（须覆盖多个遥测周期）
+  poll_s: 0.05               # 到位轮询间隔
+  arrival_tolerance_deg: 3.0 # 到位容差（含舵机死区与带载下沉：夹 378 g 瓶时腕部约低 2°；不代表 FK 精度）
+  stable_tolerance_deg: 1.0  # 稳定窗内容许波动
   ready_pose_deg: [0.0,-40.0,40.0,0.0,40.0,0.0]   # 预备姿态（低速接近）
   safe_pose_deg: [0.0,-90.0,89.0,0.0,0.0,0.0]     # 安全姿态（收尾/异常退场；J2 用 89°，
                              #   J2 限位 [-97,89]）
@@ -121,26 +121,40 @@ grasp:                       # --- YOLO 抓取（grasp_yolo / yolo_detect 使用
   device: auto               # auto=有 N 卡用 cuda:0，否则 cpu；也可直接填 cpu / cuda:0
   conf: 0.25                 # 开放词表分数偏低：球 ~0.85、瓶 ~0.48（0.5 会滤掉瓶子）
   iou: 0.45
-  classes: ["squeeze ball", "stress ball", "water bottle", "bottle"]
+  classes: ["squeeze ball", "stress ball", "water bottle", "bottle", "banana"]
                              # 检测白名单=yoloe 提示词（自由文本）。
-                             # 物理目标=弹性握力球+矿泉水瓶。
+                             # 物理目标=弹性握力球+矿泉水瓶+香蕉。
                              # 注意：yoloe 下清空此表 => 不做 set_classes => 零检测！
   depth_quantile: 0.5        # 抓取点深度分位（0.5≈物心）
   top_depth_quantile: 0.15   # top_down 用：取物体区域最近 15% 深度当顶面（透明瓶/托盘红外穿透会读远）
   support_z_m: 0.0          # top_down 用：物体所在支撑面在基座系的高度（底座与桌面同面=0）；中线不低于它+半爪宽
-  approach: top_down         # top_down=竖直向下进给、爪夹物体水平短边（躺放物体）；camera_ray=沿相机视线进给
+  cloud_erode_px: 4          # cloud_top_down 用：掩码向内腐蚀的像素数（去掉边缘飞点）
+  table_ring_inner_px: 8     # cloud_top_down 用：桌面环带内沿，掩码外多少像素起算桌面
+  table_ring_outer_px: 25    # cloud_top_down 用：桌面环带外沿；环带点太少或不平时退回 support_z_m
+  min_height_above_table_m: 0.005  # cloud_top_down 用：高出桌面超过它（米）才算物体点，滤掉混进掩码的桌面
+  table_self_correct: true       # cloud_top_down 用：桌面自校正相机姿态（底座与桌面同面时开）。
+                                #   环带拟合的桌面歪了/矮了 = 相机位姿有误差：绕光心把它转平、
+                                #   挪到 support_z_m，再重算点云；只校俯仰/横滚/竖直平移
+  table_self_correct_max_deg: 10 # 自校正上限（度）：桌面倾角超过它视为平面不可信，不修正
+  approach: cloud_top_down   # cloud_top_down=竖直下抓、掩码点云求物体中心（椭球/香蕉等）；top_down=竖直向下进给、爪夹物体水平短边（躺放物体）；camera_ray=沿相机视线进给
   open_axis: "y"             # 爪开合轴在 SDK TCP 系的方向：y 或 z（开合方向差 90° 时改 z）
-  final_motion: "linear"     # 末段及原路退出：linear=move_l；joint=关节插补
-  linear_vel_mps: 0.08       # 末段期望平均 TCP 速度（米/秒）
-  linear_acc_mps2: 0.25      # 末段 TCP 加速度参数（米/秒²）
+  final_motion: "linear"     # linear=流式连续轨迹（准备位 → 预抓取点不停 → 直线到抓取点，原路回准备位）；
+                             #   joint=关节插补、分段走、每段到位停稳
+  linear_vel_mps: 0.10       # 直线段（预抓取点 → 抓取点）TCP 速度上限（米/秒）：流式轨迹进直线段前减速到它附近，到抓取点减速到停
+  linear_acc_mps2: 0.50      # 直线段 TCP 切向加速度上限（米/秒²）
   j5_margin_deg: 5.0         # 候选 IK 在 J5 两端各留 5°，即 |J5| <= 85°
   pregrasp_offset_m: 0.05    # 预抓取点沿选定进给方向后退 5 cm
-  grasp_vel_dps: 30.0        # 抓取运动速度（低速保安全）
-  wait_before_grip_s: 0.5    # 到位后等待时长再闭爪
+  grasp_vel_dps: 70.0        # 抓取运动速度（低速保安全）
+  wait_before_grip_s: 0.0    # 到位后等待时长再闭爪（流式轨迹末尾已减速到停，默认不等）
   gripper_open_mm: 65.0      # 张口（行程 4~70mm；目标物 ~6cm 宽需全开）
   gripper_close_factor: 0.7  # 只决定闭合到哪为止的上限（实测爪宽×系数）；
                              #   夹住后锁在停住角（close_and_lock），不顶着物体保持
+  gripper_close_margin_mm: 8.0  # cloud_top_down 用：闭口上限=实测爪宽−这个余量（mm），夹爪最多合到这里；碰到物体由控制器
+                             #   碰到即锁（控制器 ≥ 0.1.5）锁住并夹紧。爪宽估大超过这个余量时碰不到物体
   gripper_close_min_mm: 15.0 # 闭口下限（防测量偏小时对刚性物硬闭堵转）
+  gripper_preclose_margin_mm: 20     # cloud_top_down 用：去程路上把夹爪先合到「爪宽 + 这个余量」（mm），缩短闭爪行程。
+                             #   0 = 不预合拢，下降时全开；水平定位偏差大时调大或填 0（指尖可能压到物体顶上）；
+                             #   非 0 时至少留 8 mm，两指不压着物体下降
   grasp_offset_m: 0.040      # TCP 沿进给方向停在抓取点外多远：SDK 的 TCP 在两指根部（d1t.json），指尖再伸出 50 mm；
                              #   0.040 = 指尖越过抓取点约 1 cm、指垫夹在物体中线。到位太深调大，太浅调小
   base_offset_m: [0.0, 0.0, 0.0]  # 抓取点固定偏差补偿（基座系 x 前 / y 左 / z 上，米）：填「实测物体中点 − 日志位置」的稳定均值（见 README「精度调整」）

@@ -41,6 +41,7 @@ constexpr uint32_t J6_HOT = 1u << 13;
 constexpr uint32_t TARGET_FAR = 1u << 14;
 constexpr uint32_t OUT_OF_LIMIT = 1u << 15;
 constexpr uint32_t RESET_DENIED = 1u << 16;  // RESET 有位未清（原因未经新鲜反馈证明解除，§3.7-2）；T3 选号
+constexpr uint32_t J6_CONTACT = 1u << 17;    // J6 碰到即锁生效中（锁定期间每周期置位，不锁存、非故障）
 }  // namespace bits
 
 // = ArmCmd_ + 控制器收到时刻
