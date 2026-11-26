@@ -1,16 +1,19 @@
 # AI_drive_arm
 
-宇树 Unitree D1-T 桌面舵机臂（6 轴 + 夹爪）的**开源臂载控制器与上位机 SDK**，当前版本 **v0.1.5**。
+宇树 Unitree D1-T 桌面舵机臂（6 轴 + 夹爪）的**开源臂载控制器、上位机 SDK 与 PICO 遥操作**，当前版本 **v0.2.0**（控制器与 SDK 0.1.5）。
 
 - **臂载控制器 `d1t_arm_ctrl`**（C++17）：替换臂上原厂的 4 个服务。单线程独占舵机总线，
   20 Hz 关节流式 + 七轴同步反馈；看门狗、软急停、限位限速、多圈检查、夹爪过温保护、夹爪碰到即锁（碰到物体即锁住并定量夹紧）。
   同一份代码带 `--sim` 假舵机，没有臂也能跑。
 - **上位机 SDK `d1t_sdk`**（Python）：FK/IK、关节五次多项式、末端直线、帧同步流式；
   接口与 d1arm_sdk 同名同参同单位，底层经 Cyclone DDS 0.10.2 直连臂上控制器，不起服务。
+- **PICO 手柄遥操作** `tools/pico_teleop`：PICO 4 Ultra 浏览器 WebXR → TeleRobot → 离合映射 → SDK 逆解 + 20 Hz 流式；
+  朝向标定、平移 / 姿态限速与手柄姿态低通、夹爪随扳机且碰到即锁、A/B 一键回准备位 / 折叠位、断流停臂；
+  `deploy/teleop_up.sh` 一条命令起全套（仿真或真臂）。
 - **部署脚本**：仿真与实机各几条命令，不用手写 DDS 配置；**MuJoCo 只读 3D 显示** `tools/arm_viz`。
 
 项目最终目标是「遥操作采集示范 → 训练模仿学习策略（ACT）→ 实机凭腕部相机自主抓取」；
-本版交付的是这条路线的底座：可流式控制、可仿真、可复现的控制器与 SDK。
+本版交付的是这条路线的前两段：可流式控制、可仿真的控制器与 SDK，以及能实机取放的遥操作。
 
 ## 1. 硬件前提
 
@@ -19,6 +22,7 @@
 | 机械臂 | 宇树 Unitree D1-T，6 轴 + 夹爪，关节编号 J0–J6（J6 = 夹爪） |
 | 舵机 | 7 颗 FashionStar 总线舵机（J0–J2 RX18-U100H-M，J3–J6 HX8-U50H-M），**固件必须 V330**：出厂 V311 不支持本控制器依赖的 0x16 / 0x18 / 0x19 指令（F34、F35）。升级步骤见 [`deploy/舵机升级.md`](deploy/舵机升级.md) |
 | 臂载计算机 | 随臂出厂：aarch64、Ubuntu 20.04、4 核 Cortex-A55（F18、F28），经 `/dev/ttyS4` @115200 直挂舵机总线（F29）；自带 Cyclone DDS C++，本控制器直接在其上编译运行（F62、F65） |
+| 遥操作（可选） | PICO 4 Ultra（浏览器 WebXR）与上位机连同一路由器 Wi-Fi；上位机部署 TeleRobot（gitee.com/gccodespace/TeleRobot）作为手柄输入，见 [`tools/pico_probe/README.md`](tools/pico_probe/README.md) |
 | 上位机 | Ubuntu 22.04 LTS，x86_64（已验证机型：Ubuntu 22.04.5 LTS，x86_64，机械革命 MECHREVO 极光 JIGUANG Series 笔记本，Intel Core i7-13645HX）；与臂网线直连，同网段 192.168.123.0/24（臂默认 192.168.123.100）；Python ≥ 3.8 |
 
 ## 2. 与原厂控制器 / SDK 的区别
@@ -112,6 +116,17 @@ bash deploy/arm_restore.sh
 `free_all()` 后臂会掉，先托住。逐项验收见 [`sdk/实机验收清单.md`](sdk/实机验收清单.md)。
 本仓库不对实机使用后果负责（见 LICENSE）。
 
+### 4.3 PICO 遥操作
+
+```bash
+bash deploy/teleop_up.sh sim --viz    # 仿真：起仿真控制器 + TeleRobot + 遥操作 + 3D 显示
+bash deploy/teleop_up.sh real         # 真臂：臂上控制器先起好；遥操作用实机参数
+bash deploy/teleop_up.sh stop
+```
+
+脚本先检查 Wi-Fi、路由、端口与控制器，再在 tmux 会话里起各进程，不发运动命令。PICO 上的操作、朝向标定与
+A/B 键见 [`tools/pico_teleop/README.md`](tools/pico_teleop/README.md)；逐项验收见同目录的仿真 / 实机验收清单。
+
 ## 5. 已知限制
 
 | # | 限制 | 说明 |
@@ -123,9 +138,9 @@ bash deploy/arm_restore.sh
 | 5 | J4 保持时小幅自激 | 多个姿态（J4 约 40–94°）保持时 J4 会抖动约 0.7–0.8°；控制器对 J4 的停住判据放宽到 2.0°（其余轴 0.5°），不再因此报 HOLD_FAIL，但抖动本身仍在；J4 每秒 6° 以下的缓慢漂移不再报警 |
 | 6 | 失力示教锁住会跳 | 失力时臂挂在重力上，锁住时舵机拉回保持位，跳约 1–1.6°（实机验收观察，未单列事实编号） |
 | 7 | 绝对精度 | 关节方向已与真臂核对（F81），零位偏移未精标：FK / IK 绝对位置按 ±1 cm 量级预期，相对运动形状不受影响 |
-| 8 | 未做实机验收的功能 | 圆弧 `move_c`；流式带夹爪目标 `j6_deg`；J6 50 ℃ 释放（实机未触发过，F70）；可选开机自启服务 `deploy/d1t-arm-ctrl.service` |
+| 8 | 未做实机验收的功能 | 圆弧 `move_c`；J6 50 ℃ 释放（实机未触发过，F70）；可选开机自启服务 `deploy/d1t-arm-ctrl.service` |
 | 9 | 无碰撞检查、无力控 | 只有关节限位；夹持力由碰到即锁的固定夹紧量决定，另有舵机功率保护 + 温度守卫（45 ℃ 降出力 / 50 ℃ 释放） |
-| 10 | 夹爪碰到即锁 | 判据按 330 ml 瓶（硬物）实测定：电流 > 150 mA 或角度停住而命令仍往里走，各连续 2 周期；软物体电流可能不够，靠「角度停住」判据，锁得稍晚。锁住后再往里 2.5°（夹紧量，约 150 mA），持续夹持约 3–7 分钟会到 45 ℃，降出力后夹紧量消失、夹持变松。判据按 SDK 夹爪速度（≤ 20°/s）定，流式里更快地合夹爪可能误判为碰到 |
+| 10 | 夹爪碰到即锁 | 判据按 330 ml 瓶（硬物）实测定：电流 > 150 mA 或角度停住而命令仍往里走，各连续 2 周期；软物体电流可能不够，靠「角度停住」判据，锁得稍晚。锁住后再往里 2.5°（夹紧量，约 150 mA），持续夹持约 3–7 分钟会到 45 ℃，降出力后夹紧量消失、夹持变松。判据按 SDK 夹爪速度（≤ 20°/s）定，流式里更快地合夹爪可能误判为碰到；遥操作以 60°/s 合夹爪实机夹取放 330 ml 瓶正常 |
 | 11 | 硬件前提 | 只在 D1-T + 舵机固件 V330 上验证过（F34、F35）；V311 下控制器无法工作 |
 
 ## 6. 分支
@@ -141,9 +156,12 @@ bash deploy/arm_restore.sh
 arm_onboard/controller/   臂载控制器 d1t_arm_ctrl（C++17；src/、idl/、tests/，含 --sim 仿真）
 sdk/                      上位机 SDK d1t_sdk（examples/ 示例、tests/ 离线测试、arm_model/ 臂参数与 URDF）
 tools/arm_viz/            MuJoCo 只读 3D 显示（只订阅状态，不发命令）
+tools/pico_teleop/        PICO 手柄遥操作（离合映射之后的限速 / 夹爪 / 一键回位 / 振动服务）
+tools/pico_probe/         PICO 输入探针与假发布器（TeleRobot 部署说明）
 tools/arm_client/         维修工具：发命令 / 录状态 / 盯 J6 温度
 deploy/                   部署脚本与文档：setup_host / env.sh / sim_start（上位机），
-                          arm_install / arm_start / arm_restore（臂上），虚拟部署 / 实机部署 / 舵机升级
+                          arm_install / arm_start / arm_restore（臂上），teleop_up（遥操作一键启动），
+                          虚拟部署 / 实机部署 / 舵机升级
 tests/scripts/            实机验收与诊断脚本（方向核对、示教直线 / 流式、回放、缺包监视、流式连续性复算）
                           以及研究记录阶段的总线测试脚本
 docs/FACTS.md             事实表：F 编号与证据出处

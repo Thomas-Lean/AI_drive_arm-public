@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PICO 手柄振动（遥操作反馈）</title>
+<style>
+  body { background:#111; color:#eee; font:20px/1.5 sans-serif; margin:24px; }
+  button { font-size:28px; padding:16px 32px; }
+  #status { color:#fc6; }
+  pre { font-size:14px; }
+</style>
+</head>
+<body>
+<h1>PICO 手柄振动（遥操作反馈）</h1>
+<p>进入 VR 后不用操作：服务端每发一条「振动」命令，视野整体闪一下（<span style="color:#f80">橙=右手</span>、
+<span style="color:#48f">蓝=左手</span>），同时该手柄应振动。<b>闪了但没振</b> = 命令到了、浏览器不支持振动；
+<b>不闪</b> = 命令没到。超过 0.5 s 的旧命令会被丢弃（进 VR 前积压的不再一次全振）。
+按手柄 A / X 键 = 本地自测振动（不经服务端）。按左手柄菜单键或摘头显退出。</p>
+<button id="enter">进入 VR</button>
+<p id="status">检测中…</p>
+<pre id="caps"></pre>
+<script>
+'use strict';
+const statusEl = document.getElementById('status');
+const capsEl = document.getElementById('caps');
+const btn = document.getElementById('enter');
+let lastCmdId = 0, flash = null, caps = {}, prevA = {};
+
+function post(kind, extra) {
+  const body = JSON.stringify(Object.assign({kind, t: Date.now()}, extra));
+  return fetch('/log', {method:'POST', headers:{'Content-Type':'application/json'}, body}).catch(() => {});
+}
+
+function describe(src) {
+  const gp = src.gamepad;
+  const out = {profiles: src.profiles, hasGamepad: !!gp};
+  if (!gp) return out;
+  const ha = gp.hapticActuators;
+  out.hapticActuators = ha ? ha.length : null;
+  out.hapticTypes = ha ? Array.from(ha).map(a => a && a.type) : null;
+  out.hapticPulseFn = !!(ha && ha[0] && typeof ha[0].pulse === 'function');
+  const va = gp.vibrationActuator;
+  out.vibrationActuator = va ? (va.type || 'present') : null;
+  out.vibrationPulseFn = !!(va && typeof va.pulse === 'function');
+  out.vibrationPlayEffectFn = !!(va && typeof va.playEffect === 'function');
+  out.effects = va && va.effects ? Array.from(va.effects) : null;
+  return out;
+}
+
+// 依次尝试三种接口；返回 {method, result} 或 {method:null, error}
+async function vibrate(src, intensity, ms) {
+  const gp = src.gamepad;
+  if (!gp) return {method: null, error: 'no gamepad'};
+  const tries = [];
+  const ha = gp.hapticActuators && gp.hapticActuators[0];
+  if (ha && typeof ha.pulse === 'function') tries.push(['hapticActuators[0].pulse', () => ha.pulse(intensity, ms)]);
+  const va = gp.vibrationActuator;
+  if (va && typeof va.pulse === 'function') tries.push(['vibrationActuator.pulse', () => va.pulse(intensity, ms)]);
+  if (va && typeof va.playEffect === 'function') tries.push(['vibrationActuator.playEffect', () =>
+    va.playEffect('dual-rumble', {duration: ms, strongMagnitude: intensity, weakMagnitude: intensity})]);
+  if (!tries.length) return {method: null, error: 'no haptic API on gamepad'};
+  const errors = [];
+  for (const [name, fn] of tries) {
+    try { const r = await fn(); return {method: name, result: String(r)}; }
+    catch (e) { errors.push(name + ': ' + e); }
+  }
+  return {method: null, error: errors.join(' | ')};
+}
+
+async function start() {
+  const session = await navigator.xr.requestSession('immersive-vr');
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl', {xrCompatible: true});
+  session.updateRenderState({baseLayer: new XRWebGLLayer(session, gl)});
+  const space = await session.requestReferenceSpace('local');
+  caps = {}; prevA = {};
+  post('start', {ua: navigator.userAgent});
+
+  const srcByHand = h => Array.from(session.inputSources).find(s => s.handedness === h);
+  let polling = true;
+  (async function poll() {          // 服务端命令通道：每 100 ms 拉一次
+    while (polling) {
+      try {
+        const r = await fetch('/cmd?after=' + lastCmdId);
+        const cmds = await r.json();
+        for (const c of cmds) {
+          lastCmdId = Math.max(lastCmdId, c.id);
+          // 过期只由服务端按 ubox 时钟判；页面不用自己的时钟减 sent_ms（PICO 与 ubox 时钟可差 1 s 以上）
+          const recvAt = Date.now();
+          flash = {hand: c.hand, until: performance.now() + 250};
+          const hands = c.hand === 'both' ? ['left', 'right'] : [c.hand];
+          for (const h of hands) {
+            const src = srcByHand(h);
+            const res = src ? await vibrate(src, c.intensity, c.ms) : {method: null, error: 'hand not connected'};
+            post('pulse', Object.assign({id: c.id, hand: h, via: 'server', sent_ms: c.sent_ms, recv_ms: recvAt}, res));
+          }
+        }
+      } catch (e) { /* 服务端暂时不可达：继续拉 */ }
+      await new Promise(r => setTimeout(r, 100));
+    }
+  })();
+
+  session.addEventListener('end', () => {
+    polling = false;
+    post('end', {caps});
+    statusEl.textContent = '已退出 VR';
+    capsEl.textContent = JSON.stringify(caps, null, 1);
+  });
+
+  function frame(now, xrFrame) {
+    session.requestAnimationFrame(frame);
+    for (const src of session.inputSources) {
+      if (!src.handedness || !src.gamepad) continue;
+      if (!caps[src.handedness]) {
+        caps[src.handedness] = describe(src);
+        post('caps', {hand: src.handedness, caps: caps[src.handedness]});
+      }
+      const a = src.gamepad.buttons[4];          // xr-standard：4 = A / X
+      const pressed = !!(a && a.pressed);
+      if (pressed && !prevA[src.handedness]) {
+        flash = {hand: src.handedness, until: now + 250};
+        vibrate(src, 1.0, 200).then(res => post('pulse', Object.assign({hand: src.handedness, via: 'local'}, res)));
+      }
+      prevA[src.handedness] = pressed;
+    }
+    const layer = session.renderState.baseLayer;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+    if (flash && now < flash.until) {
+      if (flash.hand === 'left') gl.clearColor(0.2, 0.4, 1.0, 1);
+      else if (flash.hand === 'right') gl.clearColor(1.0, 0.5, 0.0, 1);
+      else gl.clearColor(1, 1, 1, 1);
+    } else {
+      gl.clearColor(0.07, 0.07, 0.1, 1);
+    }
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    xrFrame.getViewerPose(space);
+  }
+  session.requestAnimationFrame(frame);
+}
+
+(async () => {
+  if (!window.isSecureContext) { statusEl.textContent = '不是安全上下文：用 http://localhost:8000（adb reverse）或 HTTPS 打开'; btn.disabled = true; return; }
+  if (!navigator.xr || !(await navigator.xr.isSessionSupported('immersive-vr'))) {
+    statusEl.textContent = '此浏览器不支持 immersive-vr'; btn.disabled = true; return;
+  }
+  statusEl.textContent = '就绪，点「进入 VR」';
+  btn.onclick = () => start().catch(e => { statusEl.textContent = '进入失败：' + e; });
+})();
+</script>
+</body>
+</html>
