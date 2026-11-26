@@ -147,8 +147,8 @@ A/B 键见 [`tools/pico_teleop/README.md`](tools/pico_teleop/README.md)；逐项
 
 | 分支 | 内容 |
 |---|---|
-| `main` | 臂载控制器 + 上位机 SDK（本页） |
-| `feat/vision-grasp` | 在 main 之上加视觉抓取应用 `apps/vision_grasp`：RealSense D435i 眼在手上 + YOLOE 开放词表分割 + 点云几何定位，竖直下抓；说明见该分支的 `apps/vision_grasp/README.md` |
+| `main` | 臂载控制器 + 上位机 SDK + PICO 遥操作（本页），随主线持续更新 |
+| `feat/vision-grasp` | 视觉抓取应用 `apps/vision_grasp`（基于 v0.1.5，独立保留，不随 main 更新）：RealSense D435i 眼在手上 + YOLOE 开放词表分割 + 点云几何定位，竖直下抓；说明见该分支的 `apps/vision_grasp/README.md` |
 
 ## 7. 目录
 
